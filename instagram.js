@@ -14,9 +14,11 @@ const USER_DATA_DIR_REPLY = path.resolve('./chrome_profile_reply');
 const SEL = {
   username:   'input[name="email"]',
   password:   'input[name="pass"]',
-  loginBtn:   'button[type="submit"]',
+  // submit pode ser <button type="submit"> ou <div role="button" aria-label="Log In|Entrar">
+  loginBtn:   'button[type="submit"], [role="button"][aria-label="Log In"], [role="button"][aria-label="Entrar"]',
   twoFaInput: 'input[name="verificationCode"]',
-  successEl:  'svg[aria-label="Home"],svg[aria-label="Início"],a[href="/"][role="link"]',
+  // home detectada pela URL ou pelo ícone de notificações (EN e PT)
+  successEl:  'svg[aria-label="Home"], svg[aria-label="Início"], svg[aria-label="Notifications"], svg[aria-label="Notificações"]',
   errorAlert: '#twoFactorErrorAlert',
 };
 
@@ -122,7 +124,7 @@ async function login(profile = 'monitor') {
     // Alguns viewports exibem botão "Log in" antes do formulário
     const logInBtn = await page.evaluateHandle(() => {
       const btns = [...document.querySelectorAll('button[type="button"]')];
-      return btns.find(b => ['Log in', 'Entrar'].includes(b.innerText.trim())) ?? null;
+      return btns.find(b => /^(log\s*in|entrar)$/i.test(b.innerText.trim())) ?? null;
     }).then(h => h?.asElement()).catch(() => null);
 
     if (logInBtn) {
@@ -180,7 +182,7 @@ async function login(profile = 'monitor') {
       // Oferece trocar para app autenticador se o botão existir
       const switchToApp = await page.evaluateHandle(() => {
         const btns = [...document.querySelectorAll('button')];
-        return btns.find(b => /authenticat|autenticação/i.test(b.innerText)) ?? null;
+        return btns.find(b => /authenticat(ion app|or app|ção)/i.test(b.innerText)) ?? null;
       }).then(h => h?.asElement()).catch(() => null);
 
       if (switchToApp) {
@@ -199,7 +201,7 @@ async function login(profile = 'monitor') {
       // Oferece trocar para SMS se o botão existir
       const switchToSms = await page.evaluateHandle(() => {
         const btns = [...document.querySelectorAll('button')];
-        return btns.find(b => /^sms$/i.test(b.innerText.trim())) ?? null;
+        return btns.find(b => /^(sms|text message)$/i.test(b.innerText.trim())) ?? null;
       }).then(h => h?.asElement()).catch(() => null);
 
       if (switchToSms) {
@@ -224,10 +226,10 @@ async function login(profile = 'monitor') {
       await page.type(SEL.twoFaInput, code.trim(), { delay: 80 });
       await sleep(300);
 
-      // Clica em Confirmar buscando pelo texto (mais resiliente que seletor de classe)
+      // Clica em Confirm/Confirmar buscando pelo texto (EN e PT)
       const confirmHandle = await page.evaluateHandle(() => {
         const btns = [...document.querySelectorAll('[role="button"]')];
-        return btns.find(b => b.innerText.trim() === 'Confirmar') ?? null;
+        return btns.find(b => /^(confirm|confirmar)$/i.test(b.innerText.trim())) ?? null;
       });
 
       const el = confirmHandle && await confirmHandle.asElement();
