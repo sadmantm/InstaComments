@@ -70,83 +70,81 @@ async function openCommentsTab(page, maxRetries = 3) {
     console.log(`[tab] Tentativa ${attempt}/${maxRetries} de abrir painel de notificações...`);
 
     try {
-      // ── 0. Fechar qualquer modal que esteja bloqueando ───────────────────
+      // ── 0. Fechar qualquer modal bloqueando ──────────────────────────────
       await dismissModals(page);
 
       // ── 1. Clicar no ícone de notificações ──────────────────────────────
       const notifClicked = await page.evaluate(() => {
+        const labels = ['Notifications', 'Notificações'];
         const strategies = [
+          // SVG aria-label → link ancestral
           () => {
-            const svgs = [
-              ...document.querySelectorAll('svg[aria-label="Notificações"]'),
-              ...document.querySelectorAll('svg[aria-label="Notifications"]'),
-            ];
-            for (const svg of svgs) {
-              const link = svg.closest('a[role="link"]') || svg.closest('a');
-              if (link) { link.click(); return 'svg→a clicado'; }
+            for (const label of labels) {
+              const svgs = [...document.querySelectorAll(`svg[aria-label="${label}"]`)];
+              for (const svg of svgs) {
+                const link = svg.closest('a[role="link"]') || svg.closest('a');
+                if (link) { link.click(); return `svg[${label}]→a`; }
+              }
             }
             return null;
           },
+          // SVG click direto
           () => {
-            const svg =
-              document.querySelector('svg[aria-label="Notificações"]') ||
-              document.querySelector('svg[aria-label="Notifications"]');
-            if (svg) { svg.dispatchEvent(new MouseEvent('click', { bubbles: true })); return 'svg click direto'; }
+            for (const label of labels) {
+              const svg = document.querySelector(`svg[aria-label="${label}"]`);
+              if (svg) { svg.dispatchEvent(new MouseEvent('click', { bubbles: true })); return `svg[${label}] direto`; }
+            }
             return null;
           },
+          // <title> dentro do SVG
           () => {
             const titles = [...document.querySelectorAll('title')];
-            const t = titles.find(el => ['Notificações', 'Notifications'].includes(el.textContent.trim()));
+            const t = titles.find(el => labels.includes(el.textContent.trim()));
             if (t) {
               const link = t.closest('a[role="link"]') || t.closest('a');
-              if (link) { link.click(); return 'title→a clicado'; }
+              if (link) { link.click(); return 'title→a'; }
             }
             return null;
           },
+          // aria-label direto no elemento
           () => {
-            const el =
-              document.querySelector('[aria-label="Notificações"]') ||
-              document.querySelector('[aria-label="Notifications"]');
-            if (el) { el.click(); return 'aria-label direto'; }
+            for (const label of labels) {
+              const el = document.querySelector(`[aria-label="${label}"]`);
+              if (el) { el.click(); return `aria-label[${label}]`; }
+            }
             return null;
           },
         ];
-
         for (const fn of strategies) {
-          const result = fn();
-          if (result) return result;
+          const r = fn();
+          if (r) return r;
         }
         return null;
       });
 
-      if (!notifClicked) throw new Error('Nenhuma estratégia encontrou o ícone de Notificações.');
-      console.log(`[tab] Ícone de notificações clicado via: ${notifClicked}`);
+      if (!notifClicked) throw new Error('Ícone de notificações não encontrado.');
+      console.log(`[tab] Ícone clicado via: ${notifClicked}`);
       await sleep(2000);
 
       // ── 2. Aguardar painel abrir ─────────────────────────────────────────
-      console.log('[tab] Aguardando painel de notificações abrir...');
       await page.waitForFunction(
         () => {
           const btns = [...document.querySelectorAll('[role="button"]')];
-          return btns.some(b => {
-            const t = b.innerText?.trim();
-            return ['Comentários', 'Tudo', 'All', 'Comments'].includes(t);
-          });
+          return btns.some(b => /^(comentários|comments|tudo|all)$/i.test(b.innerText?.trim()));
         },
         { timeout: 10000 }
       );
-      console.log('[tab] Painel de notificações aberto.');
+      console.log('[tab] Painel aberto.');
 
-      // ── 3. Clicar na aba "Comentários" ────────────────────────────────────
+      // ── 3. Clicar na aba Comentários / Comments ──────────────────────────
       const tabClicked = await page.evaluate(() => {
-        const labels = ['Comentários', 'Comments'];
         const btns = [...document.querySelectorAll('[role="button"]')];
-        const btn = btns.find(b => labels.includes(b.innerText?.trim()));
+        const btn = btns.find(b => /^(comentários|comments)$/i.test(b.innerText?.trim()));
         if (btn) { btn.click(); return btn.innerText.trim(); }
         return null;
       });
 
-      if (!tabClicked) throw new Error('Aba "Comentários" não encontrada no painel.');
+      if (!tabClicked) throw new Error('Aba Comments não encontrada.');
       console.log(`[tab] Aba "${tabClicked}" clicada.`);
       await sleep(2000);
 
@@ -155,26 +153,141 @@ async function openCommentsTab(page, maxRetries = 3) {
         () => document.querySelectorAll('[data-pressable-container="true"]').length > 0,
         { timeout: 10000 }
       );
-      console.log('[tab] ✅ Comentários carregados no painel.');
+      console.log('[tab] ✅ Comentários carregados.');
       return;
 
     } catch (err) {
       console.warn(`[tab] ⚠️ Tentativa ${attempt} falhou: ${err.message}`);
-      const ss = path.resolve(`./cu_${Date.now()}.png`);
-      await page.screenshot({ path: ss, fullPage: true });
+      await page.screenshot({ path: path.resolve(`./cu_${Date.now()}.png`), fullPage: true });
       if (attempt < maxRetries) {
-        console.log('[tab] Recarregando página antes de tentar novamente...');
+        console.log('[tab] Recarregando...');
         try {
           await page.goto('https://www.instagram.com/', { waitUntil: 'networkidle2', timeout: 20000 });
           await sleep(2000);
-        } catch (navErr) {
-          console.warn('[tab] Falha ao recarregar:', navErr.message);
-        }
+        } catch (e) { console.warn('[tab] Falha ao recarregar:', e.message); }
       } else {
         throw new Error(`[tab] Falha após ${maxRetries} tentativas: ${err.message}`);
       }
     }
   }
+}
+
+async function scrapeVisibleComments(page) {
+  console.log('[scrape] Extraindo comentários visíveis...');
+
+  const results = await page.evaluate(() => {
+    function fakeId(username, postShortcode, text) {
+      const raw = `${username}::${postShortcode}::${text}`;
+      return 'fake_' + raw.split('').reduce((a, c) => Math.imul(31, a) + c.charCodeAt(0) | 0, 0).toString(36);
+    }
+
+    function extractCommentText(container) {
+      // O span principal contém "username commented: texto" ou "username comentou: texto"
+      // Queremos apenas o texto após o ": "
+      const mainSpan = container.querySelector('span[dir="auto"]');
+      if (!mainSpan) return '';
+
+      // Clona o span para manipular sem alterar o DOM
+      const clone = mainSpan.cloneNode(true);
+
+      // Remove elementos de tempo (abbr/span com hora)
+      clone.querySelectorAll('abbr, time').forEach(el => el.remove());
+
+      // Remove o botão "more" / "mais"
+      clone.querySelectorAll('[role="button"]').forEach(el => el.remove());
+
+      let raw = clone.innerText || clone.textContent || '';
+
+      // Remove prefixo "username commented:" ou "username comentou:"
+      raw = raw.replace(/^.*?(?:commented|comentou)\s*:\s*/i, '');
+
+      // Remove menção inicial @username se existir
+      raw = raw.replace(/^@\S+\s*/, '');
+
+      // Remove timestamp no final (ex: "4h", "1d", "14 hours ago")
+      raw = raw.replace(/\s*\d+[hdsm]\s*$/, '').replace(/\s*\d+\s+\w+\s+ago\s*$/i, '');
+
+      return raw.trim();
+    }
+
+    const results = [];
+    const containers = document.querySelectorAll('[data-pressable-container="true"]');
+
+    for (const container of containers) {
+      try {
+        // Username: span com classe _ap3a
+        const usernameEl = container.querySelector('span._ap3a._aaco._aacw._aacx._aad7._aade');
+        if (!usernameEl) continue;
+        const username = usernameEl.innerText.trim();
+        if (!username) continue;
+
+        // Link da mídia: aria-label="Media thumbnail" ou "Miniatura de mídia"
+        const mediaLink =
+          container.querySelector('a[aria-label="Media thumbnail"]') ||
+          container.querySelector('a[aria-label="Miniatura de mídia"]');
+        if (!mediaLink) continue;
+
+        const postHref = mediaLink.getAttribute('href') || '';
+        const postMatch = postHref.match(/\/p\/([^/]+)\//);
+        if (!postMatch) continue;
+
+        const postShortcode = postMatch[1];
+        const postUrl = `https://www.instagram.com${postHref}`;
+
+        // Thumbnail
+        const thumbImg = mediaLink.querySelector('img');
+        const thumbnailUrl = thumbImg?.src || '';
+
+        // Comment ID via link /c/
+        const commentLink = container.querySelector('a[href*="/c/"]');
+        let commentId = '';
+        let commentDatetime = '';
+        if (commentLink) {
+          const href = commentLink.getAttribute('href') || '';
+          const cMatch = href.match(/\/c\/([^/]+)\//);
+          if (cMatch) commentId = cMatch[1];
+          const timeEl = commentLink.querySelector('time[datetime]');
+          if (timeEl) commentDatetime = timeEl.getAttribute('datetime') || '';
+        }
+
+        // Tempo via abbr (fallback)
+        const abbrEl = container.querySelector('abbr[aria-label]');
+        const timeLabel = abbrEl?.getAttribute('aria-label') || '';
+
+        // Texto do comentário
+        const text = extractCommentText(container);
+
+        if (!commentId) commentId = fakeId(username, postShortcode, text);
+
+        // Foto de perfil
+        const imgEl =
+          container.querySelector('img[alt$="\'s profile picture"]') ||
+          container.querySelector('img[alt*="profile picture"]') ||
+          container.querySelector('img[alt*="foto do perfil"]');
+        const profilePic = imgEl?.src || '';
+
+        if (username && postShortcode) {
+          results.push({
+            username,
+            text,
+            postShortcode,
+            postUrl,
+            thumbnailUrl,
+            postTitle: '',
+            commentId,
+            datetime: commentDatetime,
+            timeLabel,
+            profilePic,
+          });
+        }
+      } catch (_) {}
+    }
+
+    return results;
+  });
+
+  console.log(`[scrape] ${results.length} comentário(s) extraído(s).`);
+  return results;
 }
 
 async function scrollPanel(page, maxScrolls = 10) {
@@ -252,92 +365,6 @@ async function scrollPanel(page, maxScrolls = 10) {
     console.log(`[scroll] Scroll ${i + 1} OK.`);
     await sleep(1500);
   }
-}
-
-
-async function scrapeVisibleComments(page) {
-  console.log('[scrape] Extraindo comentários visíveis...');
-  const results = await page.evaluate(() => {
-    function cleanText(raw) {
-      return raw
-        .replace(/^\S+\s*\n?\s*comentou:\s*/i, '')
-        .replace(/\b\d+[.,]?\d*\s*(min|h|s|d|w|sem\.?|dias?|horas?|minutos?|segundos?|semanas?)\b.*$/i, '')
-        .replace(/\d{1,2}\s+de\s+[a-záéíóúàâêôãõç]+\.?$/i, '')
-        .replace(/\s*(mais|more)\s*$/i, '')
-        .trim();
-    }
-
-    function fakeId(username, postShortcode, cleanedText) {
-      const raw = `${username}::${postShortcode}::${cleanedText}`;
-      return 'fake_' + raw.split('').reduce((a, c) => Math.imul(31, a) + c.charCodeAt(0) | 0, 0).toString(36);
-    }
-
-    const results = [];
-    const containers = document.querySelectorAll('[data-pressable-container="true"]');
-
-    for (const container of containers) {
-      try {
-        const usernameEl = container.querySelector('span._ap3a._aaco._aacw._aacx._aad7._aade');
-        if (!usernameEl) continue;
-        const username = usernameEl.innerText.trim();
-
-        const mediaLink = container.querySelector('a[aria-label="Miniatura de mídia"]');
-        if (!mediaLink) continue;
-
-        const postHref = mediaLink.getAttribute('href') || '';
-        const postMatch = postHref.match(/\/p\/([^/]+)\//);
-        if (!postMatch) continue;
-
-        const postShortcode = postMatch[1];
-        const postUrl = `https://www.instagram.com${postHref}`;
-
-        const thumbImg = mediaLink.querySelector('img');
-        const thumbVideo = mediaLink.querySelector('video');
-        const thumbnailUrl = thumbImg?.src || thumbVideo?.getAttribute('poster') || thumbVideo?.src || '';
-        const postTitle = mediaLink.getAttribute('aria-label') || mediaLink.querySelector('img')?.getAttribute('alt') || '';
-
-        const commentLink = container.querySelector('a[href*="/c/"]');
-        let commentId = '';
-        let commentDatetime = '';
-
-        if (commentLink) {
-          const href = commentLink.getAttribute('href') || '';
-          const cMatch = href.match(/\/c\/([^/]+)\//);
-          if (cMatch) commentId = cMatch[1];
-          const timeEl = commentLink.querySelector('time[datetime]');
-          if (timeEl) commentDatetime = timeEl.getAttribute('datetime') || '';
-        }
-
-        let text = '';
-        const mainTextEl = [...container.querySelectorAll('span[dir="auto"]')].find(el => {
-          if (el.querySelector('time')) return false;
-          if (el.querySelector('a[href^="/explore/tags/"]')) return true;
-          const value = el.innerText.trim();
-          if (!value) return false;
-          if (value === username) return false;
-          if (value === 'Responder') return false;
-          if (/^\d+\s+curtida/.test(value.toLowerCase())) return false;
-          return true;
-        });
-
-        if (mainTextEl) text = cleanText(mainTextEl.innerText);
-        if (!commentId) commentId = fakeId(username, postShortcode, text);
-
-        const abbrEl = container.querySelector('abbr[aria-label]');
-        const timeLabel = abbrEl ? abbrEl.getAttribute('aria-label') : '';
-        const imgEl = container.querySelector('img[alt^="Foto do perfil"]');
-        const profilePic = imgEl ? imgEl.src : '';
-
-        if (username && postShortcode && commentId) {
-          results.push({ username, text, postShortcode, postUrl, thumbnailUrl, postTitle, commentId, datetime: commentDatetime, timeLabel, profilePic });
-        }
-      } catch (_) {}
-    }
-    return results;
-  });
-
-  console.log(`[scrape] ${results.length} comentário(s) extraído(s).`);
-  return results;
 }
 
 // ─── Helper JS injetado na página do post ────────────────────────────────────
