@@ -47,43 +47,66 @@ async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+async function dismissModals(page) {
+  await page.evaluate(() => {
+    const dismissLabels = [
+      'Not Now', 'Agora não',   // notificações
+      'Close',   'Fechar',      // genérico
+      'Cancel',  'Cancelar',
+    ];
+    const btns = [...document.querySelectorAll('button')];
+    for (const btn of btns) {
+      if (dismissLabels.some(l => btn.innerText.trim() === l)) {
+        btn.click();
+        return;
+      }
+    }
+  });
+  await sleep(800);
+}
+
 async function openCommentsTab(page, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     console.log(`[tab] Tentativa ${attempt}/${maxRetries} de abrir painel de notificações...`);
 
     try {
+      // ── 0. Fechar qualquer modal que esteja bloqueando ───────────────────
+      await dismissModals(page);
+
       // ── 1. Clicar no ícone de notificações ──────────────────────────────
-      // Tenta do mais específico ao mais genérico
       const notifClicked = await page.evaluate(() => {
         const strategies = [
-          // Clica no <a> que contém o SVG de notificações (mais confiável)
           () => {
-            const svgs = [...document.querySelectorAll('svg[aria-label="Notificações"]')];
+            const svgs = [
+              ...document.querySelectorAll('svg[aria-label="Notificações"]'),
+              ...document.querySelectorAll('svg[aria-label="Notifications"]'),
+            ];
             for (const svg of svgs) {
               const link = svg.closest('a[role="link"]') || svg.closest('a');
               if (link) { link.click(); return 'svg→a clicado'; }
             }
             return null;
           },
-          // Clica direto no SVG (fallback)
           () => {
-            const svg = document.querySelector('svg[aria-label="Notificações"]');
+            const svg =
+              document.querySelector('svg[aria-label="Notificações"]') ||
+              document.querySelector('svg[aria-label="Notifications"]');
             if (svg) { svg.dispatchEvent(new MouseEvent('click', { bubbles: true })); return 'svg click direto'; }
             return null;
           },
-          // Pelo título interno do SVG
           () => {
             const titles = [...document.querySelectorAll('title')];
-            const t = titles.find(el => el.textContent.trim() === 'Notificações');
+            const t = titles.find(el => ['Notificações', 'Notifications'].includes(el.textContent.trim()));
             if (t) {
               const link = t.closest('a[role="link"]') || t.closest('a');
               if (link) { link.click(); return 'title→a clicado'; }
             }
             return null;
           },
-          // Pelo aria-label no nav
           () => {
-            const el = document.querySelector('[aria-label="Notificações"]');
+            const el =
+              document.querySelector('[aria-label="Notificações"]') ||
+              document.querySelector('[aria-label="Notifications"]');
             if (el) { el.click(); return 'aria-label direto'; }
             return null;
           },
@@ -100,15 +123,14 @@ async function openCommentsTab(page, maxRetries = 3) {
       console.log(`[tab] Ícone de notificações clicado via: ${notifClicked}`);
       await sleep(2000);
 
-      // ── 2. Aguardar painel abrir (com timeout reduzido para retry rápido) ─
+      // ── 2. Aguardar painel abrir ─────────────────────────────────────────
       console.log('[tab] Aguardando painel de notificações abrir...');
       await page.waitForFunction(
         () => {
-          // O painel está aberto se existir algum container visível com texto "Comentários" ou "Tudo"
           const btns = [...document.querySelectorAll('[role="button"]')];
           return btns.some(b => {
             const t = b.innerText?.trim();
-            return t === 'Comentários' || t === 'Tudo' || t === 'All' || t === 'Comments';
+            return ['Comentários', 'Tudo', 'All', 'Comments'].includes(t);
           });
         },
         { timeout: 10000 }
@@ -134,7 +156,7 @@ async function openCommentsTab(page, maxRetries = 3) {
         { timeout: 10000 }
       );
       console.log('[tab] ✅ Comentários carregados no painel.');
-      return; // sucesso
+      return;
 
     } catch (err) {
       console.warn(`[tab] ⚠️ Tentativa ${attempt} falhou: ${err.message}`);
