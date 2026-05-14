@@ -27,12 +27,20 @@ const {
 } = require('./instagram.js');
 
 const httpProxy = require('http-proxy');
-const cdpProxy  = httpProxy.createProxyServer({ target: 'http://localhost:9222' });
+const cdpProxy  = httpProxy.createProxyServer({ target: 'http://localhost:9222', ws: true });
 
-app.use('/cdp-proxy', (req, res) => cdpProxy.web(req, res));
-// WebSocket também
-app.on('upgrade', (req, socket, head) => {
-  if (req.url.startsWith('/cdp-proxy')) cdpProxy.ws(req, socket, head);
+// Proxy HTTP para /cdp-proxy/*
+app.use('/cdp-proxy', function(req, res) {
+  req.url = req.url.replace('/cdp-proxy', '') || '/';
+  cdpProxy.web(req, res);
+});
+
+// Proxy WebSocket para /cdp-proxy/*
+server.on('upgrade', function(req, socket, head) {
+  if (req.url.startsWith('/cdp-proxy')) {
+    req.url = req.url.replace('/cdp-proxy', '');
+    cdpProxy.ws(req, socket, head);
+  }
 });
 
 
@@ -454,11 +462,8 @@ app.get('/api/proxy/image', function(req, res) {
 app.post('/api/login/start', async function (req, res) {
   try {
     await launchRemoteLogin();
-
-    // Porta do CDP é sempre 9222, independente da porta do Express
-    const host    = req.hostname === 'localhost' ? 'localhost' : req.hostname;
-    const cdpBase = `http://${host}:${CDP_PORT}`;  // ex: http://18.230.58.124:9222
-
+    // Agora aponta para o proxy interno — mesma origin, porta 3000
+    const cdpBase = '';  // mesma origin do frontend
     addLog('Login remoto iniciado', 'info');
     res.json({ ok: true, cdpBase });
   } catch (e) {
@@ -517,7 +522,9 @@ if (sessionsExist()) {
 }
 
 
-app.listen(PORT, async function() {
+const http   = require('http');
+const server = http.createServer(app);
+server.listen(PORT, function() {
   console.log('Servidor: http://localhost:' + PORT);
   addLog('Servidor iniciado na porta ' + PORT, 'ok');
 });

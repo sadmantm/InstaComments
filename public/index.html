@@ -459,8 +459,10 @@
     </div>
   </div>  
 <script>
-  (function initLoginModal() {
-  
+  (async function initLoginModal() {
+    const cdpBase = '/cdp-proxy';  // usa o proxy do Express, porta 3000
+
+const listRes = await fetch(cdpBase + '/json/list');
     function setState(name) {
       ['idle','loading','browser','saving','done'].forEach(s => {
         document.getElementById('login-state-' + s)?.classList.toggle('hidden', s !== name);
