@@ -1,25 +1,30 @@
-// api backend
 const puppeteer = require('puppeteer');
+const readline  = require('readline');
 const fs        = require('fs');
 const path      = require('path');
 
 const SESSION_PATH       = path.resolve('./session.json');
 const SESSION_REPLY_PATH = path.resolve('./session_reply.json');
 
-const USER_DATA_DIR         = path.resolve('./chrome_profile');
-const USER_DATA_DIR_REPLY   = path.resolve('./chrome_profile_reply');
-const USER_DATA_DIR_LOGIN   = path.resolve('./chrome_profile_login');  // temporário
+const USER_DATA_DIR       = path.resolve('./chrome_profile');
+const USER_DATA_DIR_REPLY = path.resolve('./chrome_profile_reply');
 
-const CDP_PORT = 9222;
+// ─── Selectors ────────────────────────────────────────────────────────────────
 
-let remoteLoginBrowser = null;
-let remoteLoginPage    = null;
+const SEL = {
+  username:   'input[name="email"]',
+  password:   'input[name="pass"]',
+  loginBtn:   '[aria-label="Entrar"]',
+  twoFaInput: 'input[name="verificationCode"]',
+  successEl:  'svg[aria-label="Notificações"]',
+  errorAlert: '#twoFactorErrorAlert',
+};
 
 // ─── Launch ───────────────────────────────────────────────────────────────────
 
 async function launchBrowser(headless = false, userDataDir = USER_DATA_DIR) {
   return puppeteer.launch({
-    headless: 'new',
+    headless: "new",
     userDataDir,
     args: [
       '--no-sandbox',
@@ -30,7 +35,7 @@ async function launchBrowser(headless = false, userDataDir = USER_DATA_DIR) {
       '--single-process',
       '--start-maximized',
     ],
-    defaultViewport: null,
+    defaultViewport: { width: 1280, height: 800 },
   });
 }
 
@@ -46,6 +51,7 @@ async function saveSession(page, sessionPath = SESSION_PATH) {
     }
     return data;
   });
+
   fs.writeFileSync(sessionPath, JSON.stringify({ cookies, localStorage }, null, 2));
   console.log(`✅ Sessão salva em: ${sessionPath}`);
 }
@@ -55,6 +61,7 @@ async function loadSession(page, sessionPath = SESSION_PATH) {
     console.log(`⚠️  Nenhuma sessão encontrada em: ${sessionPath}`);
     return false;
   }
+
   const session = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
   await page.goto('https://www.instagram.com', { waitUntil: 'networkidle2' });
   await page.setCookie(...session.cookies);
@@ -72,96 +79,222 @@ async function isLoggedIn(page) {
   return !loginBtn;
 }
 
-// ─── Verifica se ambas as sessões existem ─────────────────────────────────────
+// ─── Helpers internos ─────────────────────────────────────────────────────────
 
-function sessionsExist() {
-  return fs.existsSync(SESSION_PATH) && fs.existsSync(SESSION_REPLY_PATH);
+function ask(rl, question) {
+  return new Promise(resolve => rl.question(question, resolve));
 }
 
-const net = require('net');
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
 
-// Aguarda a porta CDP estar aceitando conexões
-function waitForPort(port, timeout = 15000) {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    function try_() {
-      const sock = new net.Socket();
-      sock.setTimeout(500);
-      sock.once('connect', () => { sock.destroy(); resolve(); });
-      sock.once('error',   () => { sock.destroy(); retry(); });
-      sock.once('timeout', () => { sock.destroy(); retry(); });
-      sock.connect(port, '127.0.0.1');
+// ─── Login headless ───────────────────────────────────────────────────────────
+
+/**
+ * Faz login via terminal sem interface gráfica.
+ * @param {'monitor' | 'reply'} profile
+ */
+async function login(profile = 'monitor') {
+  const isReply     = profile === 'reply';
+  const sessionPath = isReply ? SESSION_REPLY_PATH : SESSION_PATH;
+  const userDataDir = isReply ? USER_DATA_DIR_REPLY : USER_DATA_DIR;
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  console.log(`\n🔐 Login headless no Instagram [perfil: ${profile}]\n`);
+
+  const username = await ask(rl, '👤 Usuário / e-mail / celular: ');
+  const password = await ask(rl, '🔑 Senha: ');
+
+  const browser = await launchBrowser(true, userDataDir);
+  const page    = await browser.newPage();
+
+  try {
+    // 1. Abrir página de login
+    console.log('\n⏳ Abrindo página de login...');
+    await page.goto('https://www.instagram.com/accounts/login/', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30_000,
+    });
+    await sleep(2000);
+
+    // Alguns viewports exibem botão "Log in" antes do formulário
+    const logInBtn = await page.$('button[type="button"]').then(async btn => {
+      if (!btn) return null;
+      const txt = await btn.evaluate(el => el.innerText.trim());
+      return txt === 'Log in' ? btn : null;
+    }).catch(() => null);
+
+    if (logInBtn) {
+      console.log('🔘 Botão "Log in" detectado, clicando...');
+      await logInBtn.click();
+      await sleep(1000);
     }
-    function retry() {
-      if (Date.now() - start > timeout) {
-        reject(new Error(`Porta ${port} não respondeu em ${timeout}ms`));
-      } else {
-        setTimeout(try_, 300);
+
+    // 2. Preencher credenciais
+    await page.waitForSelector(SEL.username, { timeout: 30_000, visible: true });
+    await sleep(500);
+    await page.type(SEL.username, username, { delay: 60 });
+
+    await page.waitForSelector(SEL.password, { timeout: 10_000 });
+    await page.type(SEL.password, password, { delay: 60 });
+
+    await sleep(500);
+
+    // 3. Clicar em Entrar
+    await page.waitForSelector(SEL.loginBtn, { timeout: 10_000 });
+    await page.click(SEL.loginBtn);
+    console.log('🚀 Credenciais enviadas, aguardando resposta...');
+
+    // 4. Aguarda sucesso OU tela de 2FA
+    const result = await Promise.race([
+      page.waitForSelector(SEL.successEl,  { timeout: 30_000 }).then(() => 'success'),
+      page.waitForSelector(SEL.twoFaInput, { timeout: 30_000 }).then(() => '2fa'),
+    ]).catch(() => 'timeout');
+
+    if (result === 'success') {
+      console.log('✅ Login bem-sucedido sem 2FA!');
+      await saveSession(page, sessionPath);
+      return;
+    }
+
+    if (result === 'timeout') {
+      console.error('❌ Timeout: nem sucesso nem tela de 2FA detectados.');
+      return;
+    }
+
+    // 5. Fluxo 2FA
+    console.log('\n🔒 Verificação em 2 etapas detectada.');
+
+    const desc = await page.$eval(
+      '#verificationCodeDescription',
+      el => el.textContent.trim()
+    ).catch(() => '');
+
+    const isSms = desc.toLowerCase().includes('sms');
+    const isApp = desc.toLowerCase().includes('app');
+
+    if (isSms) {
+      console.log('📱 Método atual: SMS.');
+
+      // Oferece trocar para app autenticador se o botão existir
+      const switchToApp = await page.evaluateHandle(() => {
+        const btns = [...document.querySelectorAll('button')];
+        return btns.find(b => b.innerText.includes('app de autenticação')) ?? null;
+      }).then(h => h?.asElement()).catch(() => null);
+
+      if (switchToApp) {
+        const choice = await ask(rl, '🔄 Usar app de autenticação em vez de SMS? (s/N): ');
+        if (choice.trim().toLowerCase() === 's') {
+          await switchToApp.click();
+          await sleep(1000);
+          console.log('📲 Trocado para app de autenticação.');
+        } else {
+          console.log('📱 Código enviado por SMS ao número cadastrado.');
+        }
       }
+    } else if (isApp) {
+      console.log('📲 Método atual: app de autenticação.');
+
+      // Oferece trocar para SMS se o botão existir
+      const switchToSms = await page.evaluateHandle(() => {
+        const btns = [...document.querySelectorAll('button')];
+        return btns.find(b => b.innerText.trim() === 'SMS') ?? null;
+      }).then(h => h?.asElement()).catch(() => null);
+
+      if (switchToSms) {
+        const choice = await ask(rl, '🔄 Receber código por SMS em vez do app? (s/N): ');
+        if (choice.trim().toLowerCase() === 's') {
+          await switchToSms.click();
+          await sleep(1000);
+          console.log('📱 Código SMS enviado ao número cadastrado.');
+        } else {
+          console.log('📲 Use seu app de autenticação para obter o código.');
+        }
+      }
+    } else if (desc) {
+      console.log(`ℹ️  ${desc}`);
     }
-    try_();
-  });
-}
 
-async function launchRemoteLogin() {
-  if (remoteLoginBrowser) return;
+    let attempts = 0;
+    while (attempts < 3) {
+      const code = await ask(rl, '\n🔢 Digite o código de 6 dígitos: ');
 
-  remoteLoginBrowser = await puppeteer.launch({
-    headless: 'new',
-    userDataDir: USER_DATA_DIR_LOGIN,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--remote-debugging-port=' + CDP_PORT,
-      '--remote-debugging-address=0.0.0.0',
-      '--window-size=1280,800',
-    ],
-    defaultViewport: { width: 1280, height: 800 },
-  });
+      await page.click(SEL.twoFaInput, { clickCount: 3 });
+      await page.type(SEL.twoFaInput, code.trim(), { delay: 80 });
+      await sleep(300);
 
-  // Aguarda o CDP estar pronto antes de continuar
-  await waitForPort(CDP_PORT);
+      // Clica em Confirmar buscando pelo texto (mais resiliente que seletor de classe)
+      const confirmHandle = await page.evaluateHandle(() => {
+        const btns = [...document.querySelectorAll('[role="button"]')];
+        return btns.find(b => b.innerText.trim() === 'Confirmar') ?? null;
+      });
 
-  remoteLoginPage = (await remoteLoginBrowser.pages())[0];
-  await remoteLoginPage.goto('https://www.instagram.com/accounts/login/', {
-    waitUntil: 'networkidle2',
-  });
+      const el = confirmHandle && await confirmHandle.asElement();
+      if (el) await el.click();
+      else await page.keyboard.press('Enter');
 
-  console.log(`[remote-login] Browser aberto. CDP em ws://localhost:${CDP_PORT}`);
-}
+      console.log('⏳ Verificando código...');
 
-// Aguarda o usuário concluir o login e salva as DUAS sessões
-async function waitForLoginAndSave() {
-  if (!remoteLoginPage) throw new Error('Browser remoto não iniciado.');
+      const r2 = await Promise.race([
+        page.waitForSelector(SEL.successEl, { timeout: 15_000 }).then(() => 'success'),
+        page.waitForFunction(
+          sel => {
+            const node = document.querySelector(sel);
+            return node && node.textContent.trim() !== 'SMS enviado.';
+          },
+          { timeout: 15_000 },
+          SEL.errorAlert
+        ).then(() => 'error'),
+      ]).catch(() => 'timeout');
 
-  // Aguarda redirect pós-login (max 5 min)
-  await remoteLoginPage.waitForFunction(
-    () => !window.location.href.includes('/accounts/login/'),
-    { timeout: 300_000 }
-  );
+      if (r2 === 'success') {
+        console.log('✅ Código correto! Login bem-sucedido.');
+        await saveSession(page, sessionPath);
+        return;
+      }
 
-  await remoteLoginPage.waitForNetworkIdle({ idleTime: 2000 }).catch(() => {});
+      if (r2 === 'error') {
+        const msg = await page.$eval(SEL.errorAlert, e => e.textContent.trim()).catch(() => '');
+        console.error(`❌ Código inválido${msg ? ': ' + msg : ''}. Tente novamente.`);
+        attempts++;
+        continue;
+      }
 
-  // Salva sessão do monitor
-  await saveSession(remoteLoginPage, SESSION_PATH);
+      // timeout — verifica se chegou na home mesmo assim
+      const loggedIn = await page.$(SEL.successEl).then(e => !!e).catch(() => false);
+      if (loggedIn) {
+        console.log('✅ Login detectado.');
+        await saveSession(page, sessionPath);
+        return;
+      }
 
-  // Salva sessão do reply (mesmos cookies — mesmo login)
-  await saveSession(remoteLoginPage, SESSION_REPLY_PATH);
+      console.error('❌ Sem resposta clara do servidor.');
+      attempts++;
+    }
 
-  console.log('[remote-login] Ambas as sessões salvas (monitor + reply).');
+    console.error('🚫 Máximo de tentativas de 2FA atingido.');
 
-  // Limpa perfil temporário
-  try { fs.rmSync(USER_DATA_DIR_LOGIN, { recursive: true, force: true }); } catch (_) {}
-
-  await remoteLoginBrowser.close();
-  remoteLoginBrowser = null;
-  remoteLoginPage    = null;
+  } catch (err) {
+    console.error('💥 Erro inesperado:', err.message);
+    try {
+      const ss = path.resolve(`./error_${profile}_${Date.now()}.png`);
+      await page.screenshot({ path: ss, fullPage: true });
+      console.error(`📸 Screenshot salvo em: ${ss}`);
+    } catch (_) {}
+  } finally {
+    rl.close();
+    await browser.close();
+  }
 }
 
 // ─── Get session page ─────────────────────────────────────────────────────────
 
+/**
+ * Abre uma sessão autenticada.
+ * @param {'monitor' | 'reply'} profile
+ */
 async function getSessionPage(profile = 'monitor') {
   const isReply     = profile === 'reply';
   const sessionPath = isReply ? SESSION_REPLY_PATH : SESSION_PATH;
@@ -172,14 +305,14 @@ async function getSessionPage(profile = 'monitor') {
 
   const loaded = await loadSession(page, sessionPath);
   if (!loaded) {
-    console.error(`❌ Sem sessão salva para [${profile}].`);
+    console.error(`❌ Sem sessão salva para [${profile}]. Rode: node instagram.js login-${profile}`);
     await browser.close();
     return null;
   }
 
   const loggedIn = await isLoggedIn(page);
   if (!loggedIn) {
-    console.error(`❌ Sessão [${profile}] expirada.`);
+    console.error(`❌ Sessão [${profile}] expirada. Rode: node instagram.js login-${profile}`);
     await browser.close();
     return null;
   }
@@ -190,22 +323,24 @@ async function getSessionPage(profile = 'monitor') {
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
 
-const [,, command] = process.argv;
-
-if (command === 'check' || command === 'check-monitor') {
-  getSessionPage('monitor').then(async (r) => { if (r) await r.browser.close(); }).catch(console.error);
-} else if (command === 'check-reply') {
-  getSessionPage('reply').then(async (r) => { if (r) await r.browser.close(); }).catch(console.error);
+if (require.main === module) {
+  const cmd = process.argv[2];
+  if (cmd === 'login-monitor') login('monitor');
+  else if (cmd === 'login-reply') login('reply');
+  else console.log('Uso: node instagram.js login-monitor  |  node instagram.js login-reply');
 }
+
+// ─── Exports ──────────────────────────────────────────────────────────────────
 
 module.exports = {
   launchBrowser,
   saveSession,
   loadSession,
   isLoggedIn,
-  sessionsExist,
+  login,
   getSessionPage,
-  launchRemoteLogin,
-  waitForLoginAndSave,
-  CDP_PORT,
+  SESSION_PATH,
+  SESSION_REPLY_PATH,
+  USER_DATA_DIR,
+  USER_DATA_DIR_REPLY,
 };

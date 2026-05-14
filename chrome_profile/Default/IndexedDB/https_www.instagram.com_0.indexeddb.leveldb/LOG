@@ -1,3 +1,2 @@
-2026/05/14-09:35:23.115 190 Reusing MANIFEST C:\Users\teteu\OneDrive\Área de Trabalho\projetos\InstaRespostas\chrome_profile\Default\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/05/14-09:35:23.116 190 Recovering log #3
-2026/05/14-09:35:23.127 190 Reusing old log C:\Users\teteu\OneDrive\Área de Trabalho\projetos\InstaRespostas\chrome_profile\Default\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb/000003.log 
+2026/05/14-13:24:44.831 4428 Creating DB C:\Users\teteu\OneDrive\Área de Trabalho\projetos\InstaRespostas\chrome_profile\Default\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb since it was missing.
+2026/05/14-13:24:44.839 4428 Reusing MANIFEST C:\Users\teteu\OneDrive\Área de Trabalho\projetos\InstaRespostas\chrome_profile\Default\IndexedDB\https_www.instagram.com_0.indexeddb.leveldb/MANIFEST-000001

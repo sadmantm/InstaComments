@@ -842,12 +842,6 @@ function startPolling() {
     if (state.activeSection === 'dashboard') loadDashboard();
   });
 
-  es.addEventListener('login_saved', function(e) {
-    const payload = JSON.parse(e.data);
-    document.dispatchEvent(new CustomEvent('sse:login_saved', { detail: payload }));
-  });
-  
-
   // ── onerror: reconecta com back-off ─────────────────────────────────────
   es.onerror = function() {
     es.close();

@@ -1,4 +1,3 @@
-// backend
 var express = require('express');
 var path    = require('path');
 var fs      = require('fs');
@@ -20,35 +19,6 @@ var CFG_FILE    = path.join(__dirname, 'config.json');
 var PROMPT_FILE = path.join(__dirname, 'prompt.txt');
 var CREDS_FILE  = path.join(__dirname, 'credentials.json');
 var replyQueue = Promise.resolve();
-const {
-  sessionsExist,
-  launchRemoteLogin,
-  waitForLoginAndSave,
-  CDP_PORT,
-} = require('./instagram.js');
-
-const httpProxy = require('http-proxy');
-const { execFile, spawn } = require('child_process');
-
-// ── Proxy noVNC (porta 6080 → /novnc-proxy/*) ────────────────────────────────
-const novncProxy = httpProxy.createProxyServer({
-  target: 'http://127.0.0.1:6080',
-  ws: true,
-});
-
-novncProxy.on('error', function (err, req, res) {
-  console.warn('[novnc-proxy] erro:', err.message);
-  if (res && typeof res.writeHead === 'function' && !res.headersSent) {
-    res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'noVNC não iniciado (porta 6080 indisponível).' }));
-  }
-});
-
-app.use('/novnc-proxy', function (req, res) {
-  req.url = req.url.replace('/novnc-proxy', '') || '/';
-  novncProxy.web(req, res);
-});
-
 
 function enqueueReply(fn) {
   replyQueue = replyQueue.then(fn).catch(() => {});
@@ -465,67 +435,6 @@ app.get('/api/proxy/image', function(req, res) {
   request.end();
 });
 
-function startVNC() {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('/home/admin/InstaComments/start-vnc.sh', [], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    proc.unref();
-    // Aguarda 2s para o VNC e noVNC subirem
-    setTimeout(resolve, 2000);
-  });
-}
-
-// ── POST /api/login/start ────────────────────────────────────────────────────
-app.post('/api/login/start', async function (req, res) {
-  try {
-    // 1. Inicia VNC + noVNC
-    await startVNC();
-
-    // 2. Abre o Chromium com o perfil temporário na página de login
-    await launchRemoteLogin();
-
-    addLog('Login remoto iniciado', 'info');
-    res.json({ ok: true });
-  } catch (e) {
-    addLog('Erro ao iniciar login remoto: ' + e.message, 'error');
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── POST /api/login/save ─────────────────────────────────────────────────────
-app.post('/api/login/save', async function (req, res) {
-  try {
-    res.json({ ok: true, message: 'Aguardando conclusão do login…' });
-
-    waitForLoginAndSave()
-      .then(() => {
-        addLog('Sessões salvas (monitor + reply). Iniciando bot…', 'ok');
-        broadcast('login_saved', { ok: true });
-
-        // Para o VNC após salvar (não é mais necessário)
-        execFile('pkill', ['x11vnc'],    () => {});
-        execFile('pkill', ['websockify'], () => {});
-
-        startBot();
-      })
-      .catch(e => {
-        addLog('Erro ao salvar sessão: ' + e.message, 'error');
-        broadcast('login_saved', { ok: false, error: e.message });
-      });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── GET /api/login/status ────────────────────────────────────────────────────
-app.get('/api/login/status', function (req, res) {
-  res.json({ loggedIn: sessionsExist() });
-});
-
-
-
 function getRecentComments(n) {
   try {
     var db = loadDB();
@@ -539,27 +448,9 @@ function getRecentComments(n) {
 
 loadCfg();
 syncStats();
-if (sessionsExist()) {
-  // Sessões já existem — inicia o bot normalmente
-  startBot();
-} else {
-  // Sem sessão — aguarda o usuário fazer login pelo frontend
-  addLog('Nenhuma sessão encontrada. Faça login pelo painel.', 'warn');
-  console.warn('[server] Sessões não encontradas. Bot não iniciado. Aguardando login via frontend.');
-}
+startBot();
 
-
-const http   = require('http');
-const server = http.createServer(app);
-server.listen(PORT, function() {
+app.listen(PORT, async function() {
   console.log('Servidor: http://localhost:' + PORT);
   addLog('Servidor iniciado na porta ' + PORT, 'ok');
 });
-// Proxy WebSocket para /cdp-proxy/*
-server.on('upgrade', function (req, socket, head) {
-    if (req.url.startsWith('/novnc-proxy')) {
-       req.url = req.url.replace('/novnc-proxy', '');
-       novncProxy.ws(req, socket, head);
-     }
-   });
-  
