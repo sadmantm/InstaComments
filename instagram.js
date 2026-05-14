@@ -7,6 +7,10 @@ const SESSION_REPLY_PATH = path.resolve('./session_reply.json');
 
 const USER_DATA_DIR       = path.resolve('./chrome_profile');
 const USER_DATA_DIR_REPLY = path.resolve('./chrome_profile_reply');
+const CDP_PORT = 9222;
+let remoteLoginBrowser = null;
+let remoteLoginPage    = null;
+
 
 // ─── Launch ──────────────────────────────────────────────────────────────────
 
@@ -25,6 +29,52 @@ async function launchBrowser(headless = false, userDataDir = USER_DATA_DIR) {
     ],
     defaultViewport: null,
   });
+}
+
+async function launchRemoteLogin() {
+  if (remoteLoginBrowser) return; // já aberto
+
+  remoteLoginBrowser = await puppeteer.launch({
+    headless: false,            // headed para renderizar a página
+    userDataDir: USER_DATA_DIR,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--remote-debugging-port=' + CDP_PORT,
+      '--remote-debugging-address=0.0.0.0',  // escuta em todas as interfaces
+      '--window-size=1280,800',
+    ],
+    defaultViewport: { width: 1280, height: 800 },
+  });
+
+  remoteLoginPage = (await remoteLoginBrowser.pages())[0];
+  await remoteLoginPage.goto('https://www.instagram.com/accounts/login/', {
+    waitUntil: 'networkidle2',
+  });
+
+  console.log(`[remote-login] Browser aberto. CDP em ws://localhost:${CDP_PORT}`);
+}
+
+
+async function waitForLoginAndSave(profile = 'monitor') {
+  if (!remoteLoginPage) throw new Error('Browser remoto não iniciado.');
+
+  const sessionPath = profile === 'reply' ? SESSION_REPLY_PATH : SESSION_PATH;
+
+  // Aguarda até o usuário concluir o login (max 5 min)
+  await remoteLoginPage.waitForFunction(
+    () => !window.location.href.includes('/accounts/login/'),
+    { timeout: 300_000 }
+  );
+
+  await remoteLoginPage.waitForNetworkIdle({ idleTime: 2000 }).catch(() => {});
+  await saveSession(remoteLoginPage, sessionPath);
+  console.log(`[remote-login] Sessão salva: ${sessionPath}`);
+
+  await remoteLoginBrowser.close();
+  remoteLoginBrowser = null;
+  remoteLoginPage    = null;
 }
 
 // ─── Session helpers ─────────────────────────────────────────────────────────
@@ -152,4 +202,7 @@ module.exports = {
   isLoggedIn,
   getSessionPage,
   manualLogin,
+  launchRemoteLogin,
+  waitForLoginAndSave,
+  CDP_PORT,
 };

@@ -19,6 +19,7 @@ var CFG_FILE    = path.join(__dirname, 'config.json');
 var PROMPT_FILE = path.join(__dirname, 'prompt.txt');
 var CREDS_FILE  = path.join(__dirname, 'credentials.json');
 var replyQueue = Promise.resolve();
+const { launchRemoteLogin, waitForLoginAndSave, CDP_PORT } = require('./instagram.js');
 
 function enqueueReply(fn) {
   replyQueue = replyQueue.then(fn).catch(() => {});
@@ -434,6 +435,63 @@ app.get('/api/proxy/image', function(req, res) {
 
   request.end();
 });
+
+app.post('/api/login/start', async function(req, res) {
+  try {
+    await launchRemoteLogin();
+
+    // A URL pública que o frontend vai carregar no iframe
+    // Em produção, troque pelo IP/domínio público do EC2
+    const host = req.hostname === 'localhost' ? 'localhost' : req.hostname;
+    const cdpUrl = `http://${host}:${CDP_PORT}`;
+
+    addLog('Login remoto iniciado', 'info');
+    res.json({ ok: true, cdpUrl });
+  } catch (e) {
+    addLog('Erro ao iniciar login remoto: ' + e.message, 'error');
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/login/save
+// Chamado pelo botão "Salvar Login" no frontend — espera o redirect pós-login
+app.post('/api/login/save', async function(req, res) {
+  const profile = req.body?.profile || 'monitor';
+  try {
+    // Não aguarda aqui — responde imediatamente e processa em background
+    waitForLoginAndSave(profile)
+      .then(() => {
+        addLog(`Sessão [${profile}] salva com sucesso`, 'ok');
+        broadcast('login_saved', { profile, ok: true });
+      })
+      .catch(e => {
+        addLog(`Erro ao salvar sessão [${profile}]: ${e.message}`, 'error');
+        broadcast('login_saved', { profile, ok: false, error: e.message });
+      });
+
+    res.json({ ok: true, message: 'Aguardando conclusão do login no browser...' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/login/status
+// Verifica se já existe sessão válida salva
+app.get('/api/login/status', async function(req, res) {
+  const { getSessionPage } = require('./instagram.js');
+  try {
+    const session = await getSessionPage('monitor');
+    if (session) {
+      await session.browser.close();
+      res.json({ loggedIn: true });
+    } else {
+      res.json({ loggedIn: false });
+    }
+  } catch {
+    res.json({ loggedIn: false });
+  }
+});
+
 
 function getRecentComments(n) {
   try {
