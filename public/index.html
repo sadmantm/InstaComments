@@ -494,32 +494,48 @@
   
     // Inicia browser no servidor
     document.getElementById('btn-start-browser')?.addEventListener('click', async () => {
-      setState('loading');
-      try {
-        const res  = await fetch('/api/login/start', { method: 'POST' });
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error);
-  
-        // Monta URL do DevTools Inspector (página /json do CDP retorna a wsUrl)
-        // Usamos o endpoint /json/list para pegar a URL da aba aberta
-        const listRes  = await fetch(data.cdpUrl + '/json/list');
-        const tabs     = await listRes.json();
-        const tab      = tabs.find(t => t.url.includes('instagram.com')) || tabs[0];
-  
-        if (!tab) throw new Error('Nenhuma aba encontrada no browser remoto.');
-  
-        // Monta URL do DevTools frontend embutido no Chromium
-        const inspectorUrl = data.cdpUrl + '/devtools/inspector.html?ws='
-          + encodeURIComponent(tab.webSocketDebuggerUrl.replace('ws://', ''));
-  
-        document.getElementById('login-frame').src = inspectorUrl;
-        setState('browser');
-      } catch (e) {
-        setState('idle');
-        showToast('error', 'Erro ao abrir browser: ' + e.message);
-      }
-    });
-  
+  setState('loading');
+  try {
+    const res  = await fetch('/api/login/start', { method: 'POST' });
+
+    // Resposta pode ser HTML de erro — verifica content-type antes de parsear
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      const text = await res.text();
+      throw new Error('Resposta inesperada do servidor: ' + text.slice(0, 100));
+    }
+
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+
+    // cdpBase vem do servidor, ex: "http://18.230.58.124:9222"
+    const cdpBase = data.cdpBase;
+    if (!cdpBase) throw new Error('cdpBase não retornado pelo servidor.');
+
+    // Busca a lista de abas abertas no Chromium via CDP
+    const listRes = await fetch(cdpBase + '/json/list');
+    const tabs    = await listRes.json();
+    const tab     = tabs.find(t => t.url && t.url.includes('instagram.com')) || tabs[0];
+
+    if (!tab || !tab.webSocketDebuggerUrl) {
+      throw new Error('Nenhuma aba encontrada no browser remoto.');
+    }
+
+    // Monta URL do DevTools embutido no Chromium
+    const wsPath      = tab.webSocketDebuggerUrl.replace(/^ws:\/\/[^/]+/, '');
+    const inspectorUrl = cdpBase + '/devtools/inspector.html?ws='
+      + encodeURIComponent(tab.webSocketDebuggerUrl.replace('ws://', ''));
+
+    document.getElementById('login-frame').src = inspectorUrl;
+    setState('browser');
+
+  } catch (e) {
+    setState('idle');
+    showToast('error', 'Erro ao abrir browser: ' + e.message);
+  }
+});
+
+
     // Salva sessão
     document.getElementById('btn-save-login')?.addEventListener('click', async () => {
       setState('saving');

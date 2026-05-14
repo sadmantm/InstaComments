@@ -26,6 +26,15 @@ const {
   CDP_PORT,
 } = require('./instagram.js');
 
+const httpProxy = require('http-proxy');
+const cdpProxy  = httpProxy.createProxyServer({ target: 'http://localhost:9222' });
+
+app.use('/cdp-proxy', (req, res) => cdpProxy.web(req, res));
+// WebSocket também
+app.on('upgrade', (req, socket, head) => {
+  if (req.url.startsWith('/cdp-proxy')) cdpProxy.ws(req, socket, head);
+});
+
 
 function enqueueReply(fn) {
   replyQueue = replyQueue.then(fn).catch(() => {});
@@ -446,9 +455,9 @@ app.post('/api/login/start', async function (req, res) {
   try {
     await launchRemoteLogin();
 
-    // Busca a aba aberta no CDP para montar a URL do DevTools
+    // Porta do CDP é sempre 9222, independente da porta do Express
     const host    = req.hostname === 'localhost' ? 'localhost' : req.hostname;
-    const cdpBase = `http://${host}:${CDP_PORT}`;
+    const cdpBase = `http://${host}:${CDP_PORT}`;  // ex: http://18.230.58.124:9222
 
     addLog('Login remoto iniciado', 'info');
     res.json({ ok: true, cdpBase });
