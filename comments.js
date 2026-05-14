@@ -138,7 +138,8 @@ async function openCommentsTab(page, maxRetries = 3) {
 
     } catch (err) {
       console.warn(`[tab] ⚠️ Tentativa ${attempt} falhou: ${err.message}`);
-
+      const ss = path.resolve(`./cu_${profile}_${Date.now()}.png`);
+      await page.screenshot({ path: ss, fullPage: true });
       if (attempt < maxRetries) {
         console.log('[tab] Recarregando página antes de tentar novamente...');
         try {
