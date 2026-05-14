@@ -1,22 +1,24 @@
 const puppeteer = require('puppeteer');
-const fs = require('fs');
-const path = require('path');
+const fs        = require('fs');
+const path      = require('path');
 
 const SESSION_PATH       = path.resolve('./session.json');
 const SESSION_REPLY_PATH = path.resolve('./session_reply.json');
 
-const USER_DATA_DIR       = path.resolve('./chrome_profile');
-const USER_DATA_DIR_REPLY = path.resolve('./chrome_profile_reply');
+const USER_DATA_DIR         = path.resolve('./chrome_profile');
+const USER_DATA_DIR_REPLY   = path.resolve('./chrome_profile_reply');
+const USER_DATA_DIR_LOGIN   = path.resolve('./chrome_profile_login');  // temporário
+
 const CDP_PORT = 9222;
+
 let remoteLoginBrowser = null;
 let remoteLoginPage    = null;
 
-
-// ─── Launch ──────────────────────────────────────────────────────────────────
+// ─── Launch ───────────────────────────────────────────────────────────────────
 
 async function launchBrowser(headless = false, userDataDir = USER_DATA_DIR) {
   return puppeteer.launch({
-    headless: "new",
+    headless: 'new',
     userDataDir,
     args: [
       '--no-sandbox',
@@ -31,57 +33,7 @@ async function launchBrowser(headless = false, userDataDir = USER_DATA_DIR) {
   });
 }
 
-async function launchRemoteLogin() {
-  if (remoteLoginBrowser) return;
-
-  remoteLoginBrowser = await puppeteer.launch({
-    headless: false,
-    userDataDir: USER_DATA_DIR,
-    env: {
-      ...process.env,
-      DISPLAY: process.env.DISPLAY || ':99',
-    },
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--remote-debugging-port=' + CDP_PORT,
-      '--remote-debugging-address=0.0.0.0',
-      '--window-size=1280,800',
-    ],
-    defaultViewport: { width: 1280, height: 800 },
-  });
-
-  remoteLoginPage = (await remoteLoginBrowser.pages())[0];
-  await remoteLoginPage.goto('https://www.instagram.com/accounts/login/', {
-    waitUntil: 'networkidle2',
-  });
-
-  console.log(`[remote-login] Browser aberto. CDP em ws://localhost:${CDP_PORT}`);
-}
-
-
-async function waitForLoginAndSave(profile = 'monitor') {
-  if (!remoteLoginPage) throw new Error('Browser remoto não iniciado.');
-
-  const sessionPath = profile === 'reply' ? SESSION_REPLY_PATH : SESSION_PATH;
-
-  // Aguarda até o usuário concluir o login (max 5 min)
-  await remoteLoginPage.waitForFunction(
-    () => !window.location.href.includes('/accounts/login/'),
-    { timeout: 300_000 }
-  );
-
-  await remoteLoginPage.waitForNetworkIdle({ idleTime: 2000 }).catch(() => {});
-  await saveSession(remoteLoginPage, sessionPath);
-  console.log(`[remote-login] Sessão salva: ${sessionPath}`);
-
-  await remoteLoginBrowser.close();
-  remoteLoginBrowser = null;
-  remoteLoginPage    = null;
-}
-
-// ─── Session helpers ─────────────────────────────────────────────────────────
+// ─── Session helpers ──────────────────────────────────────────────────────────
 
 async function saveSession(page, sessionPath = SESSION_PATH) {
   const cookies = await page.cookies();
@@ -93,9 +45,7 @@ async function saveSession(page, sessionPath = SESSION_PATH) {
     }
     return data;
   });
-
-  const session = { cookies, localStorage };
-  fs.writeFileSync(sessionPath, JSON.stringify(session, null, 2));
+  fs.writeFileSync(sessionPath, JSON.stringify({ cookies, localStorage }, null, 2));
   console.log(`✅ Sessão salva em: ${sessionPath}`);
 }
 
@@ -104,9 +54,7 @@ async function loadSession(page, sessionPath = SESSION_PATH) {
     console.log(`⚠️  Nenhuma sessão encontrada em: ${sessionPath}`);
     return false;
   }
-
   const session = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-
   await page.goto('https://www.instagram.com', { waitUntil: 'networkidle2' });
   await page.setCookie(...session.cookies);
   await page.evaluate((ls) => {
@@ -123,42 +71,70 @@ async function isLoggedIn(page) {
   return !loginBtn;
 }
 
-// ─── Manual login ─────────────────────────────────────────────────────────────
+// ─── Verifica se ambas as sessões existem ─────────────────────────────────────
 
-/**
- * @param {'monitor' | 'reply'} profile  Qual perfil de sessão fazer login
- */
-async function manualLogin(profile = 'monitor') {
-  const isReply     = profile === 'reply';
-  const sessionPath = isReply ? SESSION_REPLY_PATH : SESSION_PATH;
-  const userDataDir = isReply ? USER_DATA_DIR_REPLY : USER_DATA_DIR;
+function sessionsExist() {
+  return fs.existsSync(SESSION_PATH) && fs.existsSync(SESSION_REPLY_PATH);
+}
 
-  console.log(`🚀 Abrindo browser para login manual [perfil: ${profile}]...`);
-  const browser = await launchBrowser(false, userDataDir);
-  const page    = await browser.newPage();
+// ─── Login remoto via CDP (frontend faz login no browser do servidor) ─────────
 
-  await page.goto('https://www.instagram.com/accounts/login/', { waitUntil: 'networkidle2' });
+async function launchRemoteLogin() {
+  if (remoteLoginBrowser) return;
 
-  console.log('👤 Faça o login manualmente no browser aberto.');
-  console.log('⏳ Aguardando redirecionamento após login...\n');
+  remoteLoginBrowser = await puppeteer.launch({
+    headless: 'new',
+    userDataDir: USER_DATA_DIR_LOGIN,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--remote-debugging-port=' + CDP_PORT,
+      '--remote-debugging-address=0.0.0.0',
+      '--window-size=1280,800',
+    ],
+    defaultViewport: { width: 1280, height: 800 },
+  });
 
-  await page.waitForFunction(
+  remoteLoginPage = (await remoteLoginBrowser.pages())[0];
+  await remoteLoginPage.goto('https://www.instagram.com/accounts/login/', {
+    waitUntil: 'networkidle2',
+  });
+
+  console.log(`[remote-login] Browser aberto. CDP em ws://localhost:${CDP_PORT}`);
+}
+
+// Aguarda o usuário concluir o login e salva as DUAS sessões
+async function waitForLoginAndSave() {
+  if (!remoteLoginPage) throw new Error('Browser remoto não iniciado.');
+
+  // Aguarda redirect pós-login (max 5 min)
+  await remoteLoginPage.waitForFunction(
     () => !window.location.href.includes('/accounts/login/'),
-    { timeout: 120_000 }
+    { timeout: 300_000 }
   );
 
-  console.log('✅ Login detectado!');
-  await page.waitForNetworkIdle({ idleTime: 2000 }).catch(() => {});
-  await saveSession(page, sessionPath);
-  await browser.close();
+  await remoteLoginPage.waitForNetworkIdle({ idleTime: 2000 }).catch(() => {});
+
+  // Salva sessão do monitor
+  await saveSession(remoteLoginPage, SESSION_PATH);
+
+  // Salva sessão do reply (mesmos cookies — mesmo login)
+  await saveSession(remoteLoginPage, SESSION_REPLY_PATH);
+
+  console.log('[remote-login] Ambas as sessões salvas (monitor + reply).');
+
+  // Limpa perfil temporário
+  try { fs.rmSync(USER_DATA_DIR_LOGIN, { recursive: true, force: true }); } catch (_) {}
+
+  await remoteLoginBrowser.close();
+  remoteLoginBrowser = null;
+  remoteLoginPage    = null;
 }
 
 // ─── Get session page ─────────────────────────────────────────────────────────
 
-/**
- * Abre uma sessão autenticada.
- * @param {'monitor' | 'reply'} profile
- */
 async function getSessionPage(profile = 'monitor') {
   const isReply     = profile === 'reply';
   const sessionPath = isReply ? SESSION_REPLY_PATH : SESSION_PATH;
@@ -169,14 +145,14 @@ async function getSessionPage(profile = 'monitor') {
 
   const loaded = await loadSession(page, sessionPath);
   if (!loaded) {
-    console.error(`❌ Sem sessão salva para [${profile}]. Rode: node instagram.js login-${profile}`);
+    console.error(`❌ Sem sessão salva para [${profile}].`);
     await browser.close();
     return null;
   }
 
   const loggedIn = await isLoggedIn(page);
   if (!loggedIn) {
-    console.error(`❌ Sessão [${profile}] expirada. Rode: node instagram.js login-${profile}`);
+    console.error(`❌ Sessão [${profile}] expirada.`);
     await browser.close();
     return null;
   }
@@ -189,11 +165,7 @@ async function getSessionPage(profile = 'monitor') {
 
 const [,, command] = process.argv;
 
-if (command === 'login' || command === 'login-monitor') {
-  manualLogin('monitor').catch(console.error);
-} else if (command === 'login-reply') {
-  manualLogin('reply').catch(console.error);
-} else if (command === 'check' || command === 'check-monitor') {
+if (command === 'check' || command === 'check-monitor') {
   getSessionPage('monitor').then(async (r) => { if (r) await r.browser.close(); }).catch(console.error);
 } else if (command === 'check-reply') {
   getSessionPage('reply').then(async (r) => { if (r) await r.browser.close(); }).catch(console.error);
@@ -204,8 +176,8 @@ module.exports = {
   saveSession,
   loadSession,
   isLoggedIn,
+  sessionsExist,
   getSessionPage,
-  manualLogin,
   launchRemoteLogin,
   waitForLoginAndSave,
   CDP_PORT,

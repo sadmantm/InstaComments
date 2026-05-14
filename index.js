@@ -19,7 +19,13 @@ var CFG_FILE    = path.join(__dirname, 'config.json');
 var PROMPT_FILE = path.join(__dirname, 'prompt.txt');
 var CREDS_FILE  = path.join(__dirname, 'credentials.json');
 var replyQueue = Promise.resolve();
-const { launchRemoteLogin, waitForLoginAndSave, CDP_PORT } = require('./instagram.js');
+const {
+  sessionsExist,
+  launchRemoteLogin,
+  waitForLoginAndSave,
+  CDP_PORT,
+} = require('./instagram.js');
+
 
 function enqueueReply(fn) {
   replyQueue = replyQueue.then(fn).catch(() => {});
@@ -436,60 +442,46 @@ app.get('/api/proxy/image', function(req, res) {
   request.end();
 });
 
-app.post('/api/login/start', async function(req, res) {
+app.post('/api/login/start', async function (req, res) {
   try {
     await launchRemoteLogin();
 
-    // A URL pública que o frontend vai carregar no iframe
-    // Em produção, troque pelo IP/domínio público do EC2
-    const host = req.hostname === 'localhost' ? 'localhost' : req.hostname;
-    const cdpUrl = `http://${host}:${CDP_PORT}`;
+    // Busca a aba aberta no CDP para montar a URL do DevTools
+    const host    = req.hostname === 'localhost' ? 'localhost' : req.hostname;
+    const cdpBase = `http://${host}:${CDP_PORT}`;
 
     addLog('Login remoto iniciado', 'info');
-    res.json({ ok: true, cdpUrl });
+    res.json({ ok: true, cdpBase });
   } catch (e) {
     addLog('Erro ao iniciar login remoto: ' + e.message, 'error');
     res.status(500).json({ error: e.message });
   }
 });
 
-// POST /api/login/save
-// Chamado pelo botão "Salvar Login" no frontend — espera o redirect pós-login
-app.post('/api/login/save', async function(req, res) {
-  const profile = req.body?.profile || 'monitor';
+// POST /api/login/save — detecta conclusão do login, salva as duas sessões e inicia o bot
+app.post('/api/login/save', async function (req, res) {
   try {
-    // Não aguarda aqui — responde imediatamente e processa em background
-    waitForLoginAndSave(profile)
+    res.json({ ok: true, message: 'Aguardando conclusão do login…' });
+
+    // Processa em background
+    waitForLoginAndSave()
       .then(() => {
-        addLog(`Sessão [${profile}] salva com sucesso`, 'ok');
-        broadcast('login_saved', { profile, ok: true });
+        addLog('Sessões salvas (monitor + reply). Iniciando bot…', 'ok');
+        broadcast('login_saved', { ok: true });
+        startBot();  // inicia o bot automaticamente após login
       })
       .catch(e => {
-        addLog(`Erro ao salvar sessão [${profile}]: ${e.message}`, 'error');
-        broadcast('login_saved', { profile, ok: false, error: e.message });
+        addLog('Erro ao salvar sessão: ' + e.message, 'error');
+        broadcast('login_saved', { ok: false, error: e.message });
       });
-
-    res.json({ ok: true, message: 'Aguardando conclusão do login no browser...' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// GET /api/login/status
-// Verifica se já existe sessão válida salva
-app.get('/api/login/status', async function(req, res) {
-  const { getSessionPage } = require('./instagram.js');
-  try {
-    const session = await getSessionPage('monitor');
-    if (session) {
-      await session.browser.close();
-      res.json({ loggedIn: true });
-    } else {
-      res.json({ loggedIn: false });
-    }
-  } catch {
-    res.json({ loggedIn: false });
-  }
+// GET /api/login/status — verifica se as sessões existem
+app.get('/api/login/status', function (req, res) {
+  res.json({ loggedIn: sessionsExist() });
 });
 
 
@@ -506,7 +498,15 @@ function getRecentComments(n) {
 
 loadCfg();
 syncStats();
-startBot();
+if (sessionsExist()) {
+  // Sessões já existem — inicia o bot normalmente
+  startBot();
+} else {
+  // Sem sessão — aguarda o usuário fazer login pelo frontend
+  addLog('Nenhuma sessão encontrada. Faça login pelo painel.', 'warn');
+  console.warn('[server] Sessões não encontradas. Bot não iniciado. Aguardando login via frontend.');
+}
+
 
 app.listen(PORT, async function() {
   console.log('Servidor: http://localhost:' + PORT);
