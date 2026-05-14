@@ -14,9 +14,9 @@ const USER_DATA_DIR_REPLY = path.resolve('./chrome_profile_reply');
 const SEL = {
   username:   'input[name="email"]',
   password:   'input[name="pass"]',
-  loginBtn:   '[aria-label="Entrar"]',
+  loginBtn:   'button[type="submit"]',
   twoFaInput: 'input[name="verificationCode"]',
-  successEl:  'svg[aria-label="Notificações"]',
+  successEl:  'svg[aria-label="Home"],svg[aria-label="Início"],a[href="/"][role="link"]',
   errorAlert: '#twoFactorErrorAlert',
 };
 
@@ -120,11 +120,10 @@ async function login(profile = 'monitor') {
     await sleep(2000);
 
     // Alguns viewports exibem botão "Log in" antes do formulário
-    const logInBtn = await page.$('button[type="button"]').then(async btn => {
-      if (!btn) return null;
-      const txt = await btn.evaluate(el => el.innerText.trim());
-      return txt === 'Log in' ? btn : null;
-    }).catch(() => null);
+    const logInBtn = await page.evaluateHandle(() => {
+      const btns = [...document.querySelectorAll('button[type="button"]')];
+      return btns.find(b => ['Log in', 'Entrar'].includes(b.innerText.trim())) ?? null;
+    }).then(h => h?.asElement()).catch(() => null);
 
     if (logInBtn) {
       console.log('🔘 Botão "Log in" detectado, clicando...');
@@ -181,7 +180,7 @@ async function login(profile = 'monitor') {
       // Oferece trocar para app autenticador se o botão existir
       const switchToApp = await page.evaluateHandle(() => {
         const btns = [...document.querySelectorAll('button')];
-        return btns.find(b => b.innerText.includes('app de autenticação')) ?? null;
+        return btns.find(b => /authenticat|autenticação/i.test(b.innerText)) ?? null;
       }).then(h => h?.asElement()).catch(() => null);
 
       if (switchToApp) {
@@ -191,7 +190,7 @@ async function login(profile = 'monitor') {
           await sleep(1000);
           console.log('📲 Trocado para app de autenticação.');
         } else {
-          console.log('📱 Código enviado por SMS ao número cadastrado.');
+          console.log('📱 Código enviado por SMS.');
         }
       }
     } else if (isApp) {
@@ -200,7 +199,7 @@ async function login(profile = 'monitor') {
       // Oferece trocar para SMS se o botão existir
       const switchToSms = await page.evaluateHandle(() => {
         const btns = [...document.querySelectorAll('button')];
-        return btns.find(b => b.innerText.trim() === 'SMS') ?? null;
+        return btns.find(b => /^sms$/i.test(b.innerText.trim())) ?? null;
       }).then(h => h?.asElement()).catch(() => null);
 
       if (switchToSms) {
@@ -234,6 +233,13 @@ async function login(profile = 'monitor') {
       const el = confirmHandle && await confirmHandle.asElement();
       if (el) await el.click();
       else await page.keyboard.press('Enter');
+
+      // Detecta sucesso pelo SVG de home (qualquer idioma) ou pela URL
+      await page.waitForFunction(
+        sel => !!document.querySelector(sel) || window.location.pathname === '/',
+        { timeout: 15_000 },
+        SEL.successEl
+      ).catch(() => {});
 
       console.log('⏳ Verificando código...');
 
