@@ -12,7 +12,7 @@ const USER_DATA_DIR_REPLY = path.resolve('./chrome_profile_reply');
 
 async function launchBrowser(headless = false, userDataDir = USER_DATA_DIR) {
   return puppeteer.launch({
-    headless: false,
+    headless: "new",
     userDataDir,
     args: [
       '--no-sandbox',
