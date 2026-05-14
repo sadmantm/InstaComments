@@ -399,10 +399,10 @@
     </div>
   </div>
 
-  <!-- Substitua o bloco do modal de login e o <script> inline no index.html -->
+  <!-- Substitua o modal de login e o <script> inline pelo trecho abaixo -->
 
     <div class="modal-overlay hidden" id="login-modal-overlay">
-      <div class="modal" style="width:900px;max-width:95vw">
+      <div class="modal" style="width:960px;max-width:95vw">
         <div class="modal-header">
           <h3><i class="fa-brands fa-instagram"></i> Login no Instagram</h3>
           <button class="icon-btn" id="login-modal-close"><i class="fa-solid fa-xmark"></i></button>
@@ -416,32 +416,38 @@
             </p>
           </div>
     
+          <!-- idle -->
           <div id="login-state-idle" style="padding:40px;text-align:center">
-            <i class="fa-solid fa-browser" style="font-size:40px;opacity:.3;margin-bottom:12px"></i>
+            <i class="fa-solid fa-display" style="font-size:40px;opacity:.3;margin-bottom:12px"></i>
             <p style="color:var(--text-muted)">Clique em <strong>Iniciar Browser</strong> para abrir o Chromium no servidor.</p>
             <button class="btn-primary" id="btn-start-browser">
               <i class="fa-solid fa-play"></i> Iniciar Browser
             </button>
           </div>
     
+          <!-- loading -->
           <div id="login-state-loading" class="hidden" style="padding:40px;text-align:center">
             <div class="spinner" style="margin:0 auto 12px"></div>
             <p style="color:var(--text-muted)">Abrindo Chromium no servidor…</p>
           </div>
     
+          <!-- browser: iframe noVNC -->
           <div id="login-state-browser" class="hidden">
             <iframe
               id="login-frame"
-              style="width:100%;height:560px;border:none;display:block"
-              sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+              style="width:100%;height:580px;border:none;display:block;background:#000"
+              sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+              allow="clipboard-read; clipboard-write"
             ></iframe>
           </div>
     
+          <!-- saving -->
           <div id="login-state-saving" class="hidden" style="padding:40px;text-align:center">
             <div class="spinner" style="margin:0 auto 12px"></div>
             <p style="color:var(--text-muted)">Salvando sessão… aguarde.</p>
           </div>
     
+          <!-- done -->
           <div id="login-state-done" class="hidden" style="padding:40px;text-align:center">
             <i class="fa-solid fa-circle-check" style="font-size:40px;color:var(--green);margin-bottom:12px"></i>
             <p><strong>Login salvo com sucesso!</strong></p>
@@ -460,9 +466,8 @@
     
     <script>
       (async function initLoginModal() {
-        const cdpBase = '/cdp-proxy';
     
-        // ── helpers ──────────────────────────────────────────────────────────────
+        // ── helpers ───────────────────────────────────────────────────────────────
         function setState(name) {
           ['idle', 'loading', 'browser', 'saving', 'done'].forEach(s => {
             document.getElementById('login-state-' + s)?.classList.toggle('hidden', s !== name);
@@ -493,7 +498,11 @@
         });
     
         // ── fecha modal ───────────────────────────────────────────────────────────
-        const closeModal = () => document.getElementById('login-modal-overlay').classList.add('hidden');
+        const closeModal = () => {
+          document.getElementById('login-modal-overlay').classList.add('hidden');
+          // Para de exibir o noVNC ao fechar
+          document.getElementById('login-frame').src = '';
+        };
         document.getElementById('login-modal-close')?.addEventListener('click', closeModal);
         document.getElementById('login-modal-cancel')?.addEventListener('click', closeModal);
     
@@ -501,34 +510,28 @@
         document.getElementById('btn-start-browser')?.addEventListener('click', async () => {
           setState('loading');
           try {
-            // 1. pede ao backend para abrir o Chromium
             const res = await fetch('/api/login/start', { method: 'POST' });
     
             const contentType = res.headers.get('content-type') || '';
             if (!contentType.includes('application/json')) {
               const text = await res.text();
-              throw new Error('Resposta inesperada do servidor: ' + text.slice(0, 100));
+              throw new Error('Resposta inesperada do servidor: ' + text.slice(0, 120));
             }
     
             const data = await res.json();
             if (!data.ok) throw new Error(data.error);
     
-            // 2. só AGORA busca a lista de abas — Chromium já está rodando
-            const listRes = await fetch(cdpBase + '/json/list');
-            if (!listRes.ok) throw new Error('Não foi possível listar abas CDP (status ' + listRes.status + ')');
+            // Aponta o iframe para o noVNC servido pelo proxy do Express
+            // O noVNC já carrega conectado ao VNC graças aos parâmetros abaixo
+            const novncUrl = '/novnc-proxy/vnc.html'
+              + '?host=' + encodeURIComponent(location.hostname)
+              + '&port=' + encodeURIComponent(location.port || (location.protocol === 'https:' ? 443 : 80))
+              + '&path=novnc-proxy/websockify'
+              + '&autoconnect=true'
+              + '&resize=scale'
+              + '&show_dot=false';
     
-            const tabs = await listRes.json();
-            const tab  = tabs.find(t => t.url && t.url.includes('instagram.com')) || tabs[0];
-    
-            if (!tab || !tab.webSocketDebuggerUrl) {
-              throw new Error('Nenhuma aba encontrada no browser remoto.');
-            }
-    
-            // 3. monta URL do DevTools embutido
-            const inspectorUrl = cdpBase + '/devtools/inspector.html?ws='
-              + encodeURIComponent(tab.webSocketDebuggerUrl.replace('ws://', ''));
-    
-            document.getElementById('login-frame').src = inspectorUrl;
+            document.getElementById('login-frame').src = novncUrl;
             setState('browser');
     
           } catch (e) {
@@ -558,9 +561,10 @@
           const { ok, error } = e.detail;
           if (ok) {
             setState('done');
-            document.getElementById('session-dot').className   = 'status-dot online';
+            document.getElementById('login-frame').src = '';
+            document.getElementById('session-dot').className     = 'status-dot online';
             document.getElementById('session-label').textContent = 'Sessão ativa';
-            showToast('success', 'Sessão salva! Bot pode ser iniciado.');
+            showToast('success', 'Sessão salva! Bot iniciado.');
           } else {
             setState('browser');
             showToast('error', 'Falha ao salvar sessão: ' + error);

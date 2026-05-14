@@ -28,13 +28,27 @@ const {
 } = require('./instagram.js');
 
 const httpProxy = require('http-proxy');
-const cdpProxy  = httpProxy.createProxyServer({ target: 'http://localhost:9222', ws: true });
+const { execFile, spawn } = require('child_process');
 
-// Proxy HTTP para /cdp-proxy/*
-app.use('/cdp-proxy', function(req, res) {
-  req.url = req.url.replace('/cdp-proxy', '') || '/';
-  cdpProxy.web(req, res);
+// ── Proxy noVNC (porta 6080 → /novnc-proxy/*) ────────────────────────────────
+const novncProxy = httpProxy.createProxyServer({
+  target: 'http://127.0.0.1:6080',
+  ws: true,
 });
+
+novncProxy.on('error', function (err, req, res) {
+  console.warn('[novnc-proxy] erro:', err.message);
+  if (res && typeof res.writeHead === 'function' && !res.headersSent) {
+    res.writeHead(502, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'noVNC não iniciado (porta 6080 indisponível).' }));
+  }
+});
+
+app.use('/novnc-proxy', function (req, res) {
+  req.url = req.url.replace('/novnc-proxy', '') || '/';
+  novncProxy.web(req, res);
+});
+
 
 function enqueueReply(fn) {
   replyQueue = replyQueue.then(fn).catch(() => {});
@@ -451,30 +465,50 @@ app.get('/api/proxy/image', function(req, res) {
   request.end();
 });
 
+function startVNC() {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('/home/admin/InstaComments/start-vnc.sh', [], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    proc.unref();
+    // Aguarda 2s para o VNC e noVNC subirem
+    setTimeout(resolve, 2000);
+  });
+}
+
+// ── POST /api/login/start ────────────────────────────────────────────────────
 app.post('/api/login/start', async function (req, res) {
   try {
+    // 1. Inicia VNC + noVNC
+    await startVNC();
+
+    // 2. Abre o Chromium com o perfil temporário na página de login
     await launchRemoteLogin();
-    // Agora aponta para o proxy interno — mesma origin, porta 3000
-    const cdpBase = '';  // mesma origin do frontend
+
     addLog('Login remoto iniciado', 'info');
-    res.json({ ok: true, cdpBase });
+    res.json({ ok: true });
   } catch (e) {
     addLog('Erro ao iniciar login remoto: ' + e.message, 'error');
     res.status(500).json({ error: e.message });
   }
 });
 
-// POST /api/login/save — detecta conclusão do login, salva as duas sessões e inicia o bot
+// ── POST /api/login/save ─────────────────────────────────────────────────────
 app.post('/api/login/save', async function (req, res) {
   try {
     res.json({ ok: true, message: 'Aguardando conclusão do login…' });
 
-    // Processa em background
     waitForLoginAndSave()
       .then(() => {
         addLog('Sessões salvas (monitor + reply). Iniciando bot…', 'ok');
         broadcast('login_saved', { ok: true });
-        startBot();  // inicia o bot automaticamente após login
+
+        // Para o VNC após salvar (não é mais necessário)
+        execFile('pkill', ['x11vnc'],    () => {});
+        execFile('pkill', ['websockify'], () => {});
+
+        startBot();
       })
       .catch(e => {
         addLog('Erro ao salvar sessão: ' + e.message, 'error');
@@ -485,10 +519,11 @@ app.post('/api/login/save', async function (req, res) {
   }
 });
 
-// GET /api/login/status — verifica se as sessões existem
+// ── GET /api/login/status ────────────────────────────────────────────────────
 app.get('/api/login/status', function (req, res) {
   res.json({ loggedIn: sessionsExist() });
 });
+
 
 
 function getRecentComments(n) {
@@ -521,9 +556,10 @@ server.listen(PORT, function() {
   addLog('Servidor iniciado na porta ' + PORT, 'ok');
 });
 // Proxy WebSocket para /cdp-proxy/*
-server.on('upgrade', function(req, socket, head) {
-  if (req.url.startsWith('/cdp-proxy')) {
-    req.url = req.url.replace('/cdp-proxy', '');
-    cdpProxy.ws(req, socket, head);
-  }
-});
+server.on('upgrade', function (req, socket, head) {
+    if (req.url.startsWith('/novnc-proxy')) {
+       req.url = req.url.replace('/novnc-proxy', '');
+       novncProxy.ws(req, socket, head);
+     }
+   });
+  
