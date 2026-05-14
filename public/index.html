@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CommentOps — Gerenciador de Comentários</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+</head>
+<body>
+
+  <div class="app-shell">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon"><i class="fa-brands fa-instagram"></i></div>
+        <span class="brand-name">CommentOps</span>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-item active" data-section="dashboard">
+          <i class="fa-solid fa-chart-pie"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="#" class="nav-item" data-section="comments">
+          <i class="fa-solid fa-comments"></i>
+          <span>Comentários</span>
+          <span class="nav-badge" id="new-badge">7</span>
+        </a>
+        <a href="#" class="nav-item" data-section="automation">
+          <i class="fa-solid fa-robot"></i>
+          <span>Automação</span>
+          <span class="nav-pill active-pill" id="auto-pill">Ativo</span>
+        </a>
+        <a href="#" class="nav-item" data-section="settings">
+          <i class="fa-solid fa-sliders"></i>
+          <span>Configurações</span>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="status-dot online"></div>
+        <span class="status-label">Sistema operacional</span>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <div class="main-wrap">
+
+      <!-- Top header -->
+      <header class="top-header">
+        <div class="header-left">
+          <button class="icon-btn sidebar-toggle" id="sidebar-toggle"><i class="fa-solid fa-bars"></i></button>
+          <div class="search-wrap">
+            <i class="fa-solid fa-magnifying-glass search-icon"></i>
+            <input type="text" class="search-input" id="search-input" placeholder="Buscar comentários, usuários ou posts…" />
+            <kbd class="search-kbd">⌘K</kbd>
+          </div>
+        </div>
+        <div class="header-right">
+          <button class="icon-btn" id="refresh-btn" title="Atualizar"><i class="fa-arrows-rotate fa-solid"></i></button>
+          <div class="header-divider"></div>
+          <div class="sync-indicator" id="sync-indicator">
+            <span class="sync-dot"></span>
+            <span class="sync-label">Sincronizado</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Sections -->
+      <main class="content-area">
+
+        <!-- DASHBOARD -->
+        <section class="section" id="section-dashboard">
+          <div class="section-header">
+            <div>
+              <h1 class="section-title">Dashboard</h1>
+              <p class="section-sub">Visão geral dos comentários nas últimas 24 horas</p>
+            </div>
+            <div class="header-actions">
+              <select class="select-input" id="dash-period">
+                <option>Últimas 24h</option>
+                <option>Últimos 7 dias</option>
+                <option>Últimos 30 dias</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-icon blue"><i class="fa-solid fa-comments"></i></div>
+              <div class="metric-body">
+                <span class="metric-value" id="m-total">248</span>
+                <span class="metric-label">Total de Comentários</span>
+              </div>
+            </div>
+            <div class="metric-card highlight-new">
+              <div class="metric-icon purple"><i class="fa-solid fa-user-plus"></i></div>
+              <div class="metric-body">
+                <span class="metric-value" id="m-new">37</span>
+                <span class="metric-label">Novos</span>
+              </div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-icon amber"><i class="fa-solid fa-clock"></i></div>
+              <div class="metric-body">
+                <span class="metric-value" id="m-pending">41</span>
+                <span class="metric-label">Pendentes</span>
+              </div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-icon green"><i class="fa-solid fa-user-pen"></i></div>
+              <div class="metric-body">
+                <span class="metric-value" id="m-manual">89</span>
+                <span class="metric-label">Respondidos Manualmente</span>
+              </div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-icon cyan"><i class="fa-solid fa-robot"></i></div>
+              <div class="metric-body">
+                <span class="metric-value" id="m-ai">81</span>
+                <span class="metric-label">Respondidos por IA</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="dash-bottom">
+            <div class="dash-card activity-card">
+              <div class="card-header-row">
+                <h3>Atividade Recente</h3>
+                <span class="card-sub">Últimas 12h</span>
+              </div>
+              <div class="activity-chart" id="activity-chart"></div>
+            </div>
+            <div class="dash-card posts-card">
+              <div class="card-header-row">
+                <h3>Posts com Mais Comentários</h3>
+              </div>
+              <div class="posts-list" id="posts-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- COMMENTS -->
+        <section class="section hidden" id="section-comments">
+          <div class="comments-layout">
+            <div class="comments-panel" id="comments-panel">
+              <div class="panel-header">
+                <h2 class="panel-title">Comentários</h2>
+                <div class="panel-controls">
+                  <button class="chip active" data-filter="all">Todos</button>
+                  <button class="chip" data-filter="new">Novos</button>
+                  <button class="chip" data-filter="pending">Pendentes</button>
+                  <button class="chip" data-filter="replied">Respondidos</button>
+                </div>
+              </div>
+              <div class="panel-filters">
+                <select class="select-sm" id="filter-post">
+                  <option value="">Todos os posts</option>
+                </select>
+                <select class="select-sm" id="filter-period">
+                  <option value="all">Qualquer data</option>
+                  <option value="1h">Última hora</option>
+                  <option value="24h">Últimas 24h</option>
+                  <option value="7d">Últimos 7 dias</option>
+                  <option value="30d">Últimos 30 dias</option>
+                </select>
+                <select class="select-sm" id="filter-type">
+                  <option value="">Todos os tipos</option>
+                  <option value="comment">Comentário</option>
+                  <option value="mention">Menção</option>
+                </select>
+              </div>
+              <div class="comments-list" id="comments-list">
+                <div class="loading-state" id="comments-loading">
+                  <div class="spinner"></div>
+                  <span>Carregando comentários…</span>
+                </div>
+              </div>
+            </div>
+            <div class="comment-detail" id="comment-detail">
+              <div class="detail-empty" id="detail-empty">
+                <i class="fa-regular fa-comment-dots"></i>
+                <p>Selecione um comentário para ver os detalhes</p>
+              </div>
+              <div class="detail-content hidden" id="detail-content"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- AUTOMATION -->
+        <section class="section hidden" id="section-automation">
+          <div class="section-header">
+            <div>
+              <h1 class="section-title">Automação</h1>
+              <p class="section-sub">Respostas prontas e controle de automação por IA</p>
+            </div>
+            <div class="header-actions">
+              <div class="master-toggle-wrap">
+                <span class="toggle-label">Automação Global</span>
+                <label class="toggle-switch large" id="master-toggle-label">
+                  <input type="checkbox" id="master-toggle" checked />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="auto-grid">
+            <div class="auto-status-card active-card" id="auto-status-card">
+              <div class="auto-status-icon"><i class="fa-solid fa-circle-check"></i></div>
+              <div class="auto-status-text">
+                <strong>Automação Ativa</strong>
+                <span>Respondendo comentários automaticamente via IA</span>
+              </div>
+              <div class="auto-status-badge on">ON</div>
+            </div>
+          </div>
+
+          <div class="rules-section">
+            <div class="rules-header">
+              <div>
+                <h3>Respostas Prontas</h3>
+                <p class="section-sub" style="margin-top:3px">Modelos de resposta reutilizáveis acionados por palavras-chave — sem precisar chamar a IA a cada vez.</p>
+              </div>
+              <button class="btn-primary sm" id="add-rule-btn"><i class="fa-solid fa-plus"></i> Nova Resposta</button>
+            </div>
+            <div class="rules-list" id="rules-list"></div>
+          </div>
+
+          <div class="auto-stats">
+            <div class="auto-stat-card">
+              <i class="fa-solid fa-bolt"></i>
+              <div>
+                <span class="stat-num">81</span>
+                <span class="stat-lbl">Respostas Automáticas Hoje</span>
+              </div>
+            </div>
+            <div class="auto-stat-card">
+              <i class="fa-solid fa-gauge-high"></i>
+              <div>
+                <span class="stat-num">1.4s</span>
+                <span class="stat-lbl">Tempo Médio de Resposta</span>
+              </div>
+            </div>
+            <div class="auto-stat-card">
+              <i class="fa-solid fa-thumbs-up"></i>
+              <div>
+                <span class="stat-num">94%</span>
+                <span class="stat-lbl">Taxa de Aceitação</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SETTINGS -->
+        <section class="section hidden" id="section-settings">
+          <div class="section-header">
+            <div>
+              <h1 class="section-title">Configurações</h1>
+              <p class="section-sub">Configurações internas do sistema</p>
+            </div>
+            <button class="btn-primary" id="save-settings-btn"><i class="fa-solid fa-floppy-disk"></i> Salvar Alterações</button>
+          </div>
+
+          <div class="settings-grid">
+
+            <!-- IA: System Prompt -->
+            <div class="settings-group span-2">
+              <h3 class="settings-group-title"><i class="fa-solid fa-robot"></i> Inteligência Artificial</h3>
+              <div class="settings-card">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <strong>Incluir Emoji nas Respostas</strong>
+                    <span>Adicionar emojis nas respostas geradas pela IA</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-emoji" checked />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="setting-row column-row">
+                  <div class="setting-info">
+                    <strong>System Prompt</strong>
+                    <span>Instrução base usada pela IA ao gerar todas as respostas. Edite conforme a voz e o tom da marca.</span>
+                  </div>
+                  <textarea class="text-area prompt-area" id="setting-system-prompt">Você é um assistente de atendimento ao cliente de uma marca de moda brasileira. Responda sempre de forma cordial, acolhedora e representando bem a marca. Seja direto e objetivo. Não invente informações sobre produtos, preços ou prazos que não foram fornecidos. Quando não souber a resposta, direcione o cliente para o link na bio ou para o atendimento por Direct. Mantenha um tom leve e próximo, como se fosse uma conversa real com o cliente.</textarea>
+                </div>
+              </div>
+            </div>
+
+            <!-- Notificações -->
+            <div class="settings-group">
+              <h3 class="settings-group-title"><i class="fa-solid fa-bell"></i> Notificações</h3>
+              <div class="settings-card">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <strong>Alertas de Novos Comentários</strong>
+                    <span>Notificar ao receber novos comentários</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" checked />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <strong>Alertas de Erros de Automação</strong>
+                    <span>Notificar quando uma regra falhar</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" checked />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <strong>Relatório Diário</strong>
+                    <span>Enviar resumo diário de atividades</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Moderação -->
+            <div class="settings-group">
+              <h3 class="settings-group-title"><i class="fa-solid fa-filter"></i> Moderação</h3>
+              <div class="settings-card">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <strong>Filtro de Spam</strong>
+                    <span>Detectar e ocultar comentários de spam automaticamente</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" checked />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="setting-row column-row">
+                  <div class="setting-info">
+                    <strong>Palavras Bloqueadas</strong>
+                    <span>Palavras que acionam ocultação automática de comentários</span>
+                  </div>
+                  <input type="text" class="text-input full-width" placeholder="spam, ofensa, concorrente…" />
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Modal: Nova Resposta Pronta -->
+  <div class="modal-overlay hidden" id="modal-overlay">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Nova Resposta Pronta</h3>
+        <button class="icon-btn" id="modal-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Nome da Resposta</label>
+          <input type="text" class="text-input full-width" id="rule-name" placeholder="Ex: Pergunta sobre preço" />
+        </div>
+        <div class="form-group">
+          <label>Palavras-chave (gatilho)</label>
+          <input type="text" class="text-input full-width" id="rule-trigger" placeholder="preço, valor, quanto custa…" />
+          <span class="form-hint">Separe por vírgula. A resposta será usada quando o comentário contiver uma dessas palavras.</span>
+        </div>
+        <div class="form-group">
+          <label>Texto da Resposta Pronta</label>
+          <textarea class="text-area" id="rule-response" placeholder="Olá! Para informações sobre preços, acesse o link na bio ou chame no Direct 😊"></textarea>
+          <span class="form-hint">Esta resposta será enviada diretamente, sem acionar a IA.</span>
+        </div>
+        <div class="form-group inline">
+          <label>Ativo</label>
+          <label class="toggle-switch">
+            <input type="checkbox" id="rule-active" checked />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="modal-save">Salvar Resposta</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
