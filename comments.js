@@ -285,7 +285,8 @@ async function scrapeVisibleComments(page) {
 
     return results;
   });
-
+  console.warn(`[tab] ⚠️ Tentativa ${attempt} falhou: ${err.message}`);
+  await page.screenshot({ path: path.resolve(`./cu.png`), fullPage: true });
   console.log(`[scrape] ${results.length} comentário(s) extraído(s).`);
   return results;
 }
