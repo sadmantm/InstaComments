@@ -77,7 +77,30 @@ function sessionsExist() {
   return fs.existsSync(SESSION_PATH) && fs.existsSync(SESSION_REPLY_PATH);
 }
 
-// ─── Login remoto via CDP (frontend faz login no browser do servidor) ─────────
+const net = require('net');
+
+// Aguarda a porta CDP estar aceitando conexões
+function waitForPort(port, timeout = 15000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    function try_() {
+      const sock = new net.Socket();
+      sock.setTimeout(500);
+      sock.once('connect', () => { sock.destroy(); resolve(); });
+      sock.once('error',   () => { sock.destroy(); retry(); });
+      sock.once('timeout', () => { sock.destroy(); retry(); });
+      sock.connect(port, '127.0.0.1');
+    }
+    function retry() {
+      if (Date.now() - start > timeout) {
+        reject(new Error(`Porta ${port} não respondeu em ${timeout}ms`));
+      } else {
+        setTimeout(try_, 300);
+      }
+    }
+    try_();
+  });
+}
 
 async function launchRemoteLogin() {
   if (remoteLoginBrowser) return;
@@ -96,6 +119,9 @@ async function launchRemoteLogin() {
     ],
     defaultViewport: { width: 1280, height: 800 },
   });
+
+  // Aguarda o CDP estar pronto antes de continuar
+  await waitForPort(CDP_PORT);
 
   remoteLoginPage = (await remoteLoginBrowser.pages())[0];
   await remoteLoginPage.goto('https://www.instagram.com/accounts/login/', {
