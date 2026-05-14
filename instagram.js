@@ -36,7 +36,6 @@ async function launchRemoteLogin() {
 
   remoteLoginBrowser = await puppeteer.launch({
     headless: false,
-    executablePath: '/usr/bin/google-chrome-stable',
     userDataDir: USER_DATA_DIR,
     env: {
       ...process.env,
