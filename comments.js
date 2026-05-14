@@ -302,31 +302,15 @@ async function scrapeVisibleComments(page) {
     }
 
     function extractCommentText(container) {
-      // O span principal contém "username commented: texto" ou "username comentou: texto"
-      // Queremos apenas o texto após o ": "
       const mainSpan = container.querySelector('span[dir="auto"]');
       if (!mainSpan) return '';
-
-      // Clona o span para manipular sem alterar o DOM
       const clone = mainSpan.cloneNode(true);
-
-      // Remove elementos de tempo (abbr/span com hora)
       clone.querySelectorAll('abbr, time').forEach(el => el.remove());
-
-      // Remove o botão "more" / "mais"
       clone.querySelectorAll('[role="button"]').forEach(el => el.remove());
-
       let raw = clone.innerText || clone.textContent || '';
-
-      // Remove prefixo "username commented:" ou "username comentou:"
       raw = raw.replace(/^.*?(?:commented|comentou)\s*:\s*/i, '');
-
-      // Remove menção inicial @username se existir
       raw = raw.replace(/^@\S+\s*/, '');
-
-      // Remove timestamp no final (ex: "4h", "1d", "14 hours ago")
       raw = raw.replace(/\s*\d+[hdsm]\s*$/, '').replace(/\s*\d+\s+\w+\s+ago\s*$/i, '');
-
       return raw.trim();
     }
 
@@ -335,13 +319,11 @@ async function scrapeVisibleComments(page) {
 
     for (const container of containers) {
       try {
-        // Username: span com classe _ap3a
         const usernameEl = container.querySelector('span._ap3a._aaco._aacw._aacx._aad7._aade');
         if (!usernameEl) continue;
         const username = usernameEl.innerText.trim();
         if (!username) continue;
 
-        // Link da mídia: aria-label="Media thumbnail" ou "Miniatura de mídia"
         const mediaLink =
           container.querySelector('a[aria-label="Media thumbnail"]') ||
           container.querySelector('a[aria-label="Miniatura de mídia"]');
@@ -354,11 +336,9 @@ async function scrapeVisibleComments(page) {
         const postShortcode = postMatch[1];
         const postUrl = `https://www.instagram.com${postHref}`;
 
-        // Thumbnail
         const thumbImg = mediaLink.querySelector('img');
         const thumbnailUrl = thumbImg?.src || '';
 
-        // Comment ID via link /c/
         const commentLink = container.querySelector('a[href*="/c/"]');
         let commentId = '';
         let commentDatetime = '';
@@ -370,16 +350,12 @@ async function scrapeVisibleComments(page) {
           if (timeEl) commentDatetime = timeEl.getAttribute('datetime') || '';
         }
 
-        // Tempo via abbr (fallback)
         const abbrEl = container.querySelector('abbr[aria-label]');
         const timeLabel = abbrEl?.getAttribute('aria-label') || '';
 
-        // Texto do comentário
         const text = extractCommentText(container);
-
         if (!commentId) commentId = fakeId(username, postShortcode, text);
 
-        // Foto de perfil
         const imgEl =
           container.querySelector('img[alt$="\'s profile picture"]') ||
           container.querySelector('img[alt*="profile picture"]') ||
@@ -405,8 +381,7 @@ async function scrapeVisibleComments(page) {
 
     return results;
   });
-  console.warn(`[tab] ⚠️ Tentativa ${attempt} falhou: ${err.message}`);
-  await page.screenshot({ path: path.resolve(`./cu.png`), fullPage: true });
+
   console.log(`[scrape] ${results.length} comentário(s) extraído(s).`);
   return results;
 }
