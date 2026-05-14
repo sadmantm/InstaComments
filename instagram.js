@@ -32,17 +32,22 @@ async function launchBrowser(headless = false, userDataDir = USER_DATA_DIR) {
 }
 
 async function launchRemoteLogin() {
-  if (remoteLoginBrowser) return; // já aberto
+  if (remoteLoginBrowser) return;
 
   remoteLoginBrowser = await puppeteer.launch({
-    headless: false,            // headed para renderizar a página
+    headless: false,
+    executablePath: '/usr/bin/google-chrome-stable',
     userDataDir: USER_DATA_DIR,
+    env: {
+      ...process.env,
+      DISPLAY: process.env.DISPLAY || ':99',
+    },
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--remote-debugging-port=' + CDP_PORT,
-      '--remote-debugging-address=0.0.0.0',  // escuta em todas as interfaces
+      '--remote-debugging-address=0.0.0.0',
       '--window-size=1280,800',
     ],
     defaultViewport: { width: 1280, height: 800 },
