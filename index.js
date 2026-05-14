@@ -35,15 +35,6 @@ app.use('/cdp-proxy', function(req, res) {
   cdpProxy.web(req, res);
 });
 
-// Proxy WebSocket para /cdp-proxy/*
-server.on('upgrade', function(req, socket, head) {
-  if (req.url.startsWith('/cdp-proxy')) {
-    req.url = req.url.replace('/cdp-proxy', '');
-    cdpProxy.ws(req, socket, head);
-  }
-});
-
-
 function enqueueReply(fn) {
   replyQueue = replyQueue.then(fn).catch(() => {});
   return replyQueue;
@@ -527,4 +518,11 @@ const server = http.createServer(app);
 server.listen(PORT, function() {
   console.log('Servidor: http://localhost:' + PORT);
   addLog('Servidor iniciado na porta ' + PORT, 'ok');
+});
+// Proxy WebSocket para /cdp-proxy/*
+server.on('upgrade', function(req, socket, head) {
+  if (req.url.startsWith('/cdp-proxy')) {
+    req.url = req.url.replace('/cdp-proxy', '');
+    cdpProxy.ws(req, socket, head);
+  }
 });
