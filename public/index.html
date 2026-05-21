@@ -3,13 +3,171 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CommentOps — Gerenciador de Comentários</title>
+  <title>Gerenciador de Comentários</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 </head>
 <body>
 
-  <div class="app-shell">
+  <!-- AUTH SCREEN -->
+  <div class="auth-screen" id="auth-screen">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="brand-icon"><i class="fa-brands fa-instagram"></i></div>
+        <span class="brand-name">CommentOps</span>
+      </div>
+  
+      <!-- Tabs -->
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login">Entrar</button>
+        <button class="auth-tab" data-tab="register">Criar conta</button>
+      </div>
+  
+      <!-- LOGIN -->
+      <div class="auth-form" id="tab-login">
+        <div class="form-group">
+          <label>E-mail</label>
+          <input type="email" class="text-input full-width" id="login-email" placeholder="seu@email.com" autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label>Senha</label>
+          <div class="input-password-wrap">
+            <input type="password" class="text-input full-width" id="login-password" placeholder="••••••••" autocomplete="current-password" />
+            <button class="toggle-pw" type="button" tabindex="-1"><i class="fa-solid fa-eye"></i></button>
+          </div>
+        </div>
+        <div id="login-error" class="auth-error hidden"></div>
+        <button class="btn-primary full-width" id="btn-login">
+          <i class="fa-solid fa-right-to-bracket"></i> Entrar
+        </button>
+      </div>
+  
+      <!-- REGISTER -->
+      <div class="auth-form hidden" id="tab-register">
+        <div class="form-group">
+          <label>Nome</label>
+          <input type="text" class="text-input full-width" id="reg-name" placeholder="Seu nome" autocomplete="name" />
+        </div>
+        <div class="form-group">
+          <label>E-mail</label>
+          <input type="email" class="text-input full-width" id="reg-email" placeholder="seu@email.com" autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label>Senha</label>
+          <div class="input-password-wrap">
+            <input type="password" class="text-input full-width" id="reg-password" placeholder="Mínimo 8 caracteres" autocomplete="new-password" />
+            <button class="toggle-pw" type="button" tabindex="-1"><i class="fa-solid fa-eye"></i></button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Confirmar Senha</label>
+          <div class="input-password-wrap">
+            <input type="password" class="text-input full-width" id="reg-confirm" placeholder="Repita a senha" autocomplete="new-password" />
+            <button class="toggle-pw" type="button" tabindex="-1"><i class="fa-solid fa-eye"></i></button>
+          </div>
+        </div>
+        <div id="reg-error" class="auth-error hidden"></div>
+        <button class="btn-primary full-width" id="btn-register">
+          <i class="fa-solid fa-user-plus"></i> Criar conta
+        </button>
+      </div>
+  
+      <p class="auth-footer-note">
+        Ao continuar você concorda com os <a href="#">termos de uso</a>.
+      </p>
+    </div>
+  </div>
+  
+  <!-- MODAL: Conectar conta Instagram -->
+  <div class="modal-overlay hidden" id="ig-connect-overlay">
+    <div class="modal ig-modal">
+  
+      <!-- Step 1: credenciais -->
+      <div id="ig-step-credentials">
+        <div class="modal-header">
+          <div class="ig-modal-title">
+            <i class="fa-brands fa-instagram ig-icon"></i>
+            <h3>Conectar conta Instagram</h3>
+          </div>
+          <button class="icon-btn" id="ig-connect-close"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="modal-body">
+          <p class="ig-info-text">
+            Para gerenciar seus comentários, conecte sua conta Instagram.
+            Suas credenciais são enviadas de forma segura e nunca armazenadas em texto puro.
+          </p>
+          <div class="form-group">
+            <label>Usuário do Instagram</label>
+            <div class="input-icon-wrap">
+              <i class="fa-solid fa-at input-icon"></i>
+              <input type="text" class="text-input full-width padded-icon" id="ig-username"
+                     placeholder="seu_usuario" autocomplete="username" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Senha do Instagram</label>
+            <div class="input-password-wrap">
+              <input type="password" class="text-input full-width" id="ig-password"
+                     placeholder="••••••••" autocomplete="current-password" />
+              <button class="toggle-pw" type="button" tabindex="-1"><i class="fa-solid fa-eye"></i></button>
+            </div>
+          </div>
+          <div id="ig-cred-error" class="auth-error hidden"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-primary" id="ig-connect-btn">
+            <i class="fa-solid fa-link"></i> Conectar
+          </button>
+        </div>
+      </div>
+  
+      <!-- Step 2: 2FA / código de verificação -->
+      <div id="ig-step-2fa" class="hidden">
+        <div class="modal-header">
+          <div class="ig-modal-title">
+            <i class="fa-solid fa-shield-halved ig-icon-2fa"></i>
+            <h3>Verificação em duas etapas</h3>
+          </div>
+        </div>
+        <div class="modal-body">
+          <p class="ig-info-text">
+            O Instagram enviou um código de 6 dígitos para o seu e-mail ou telefone cadastrado.
+            Insira o código abaixo para concluir a conexão.
+          </p>
+          <div class="form-group">
+            <label>Código de verificação</label>
+            <input type="text" class="text-input full-width code-input" id="ig-2fa-code"
+                   placeholder="000000" maxlength="6" inputmode="numeric" pattern="\d*" />
+          </div>
+          <p class="ig-resend-row">
+            Não recebeu? <button class="link-btn" id="ig-resend-btn">Reenviar código</button>
+          </p>
+          <div id="ig-2fa-error" class="auth-error hidden"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-ghost" id="ig-2fa-back">Voltar</button>
+          <button class="btn-primary" id="ig-2fa-submit">
+            <i class="fa-solid fa-check"></i> Verificar
+          </button>
+        </div>
+      </div>
+  
+      <!-- Step 3: sucesso -->
+      <div id="ig-step-success" class="hidden">
+        <div class="modal-body ig-success-body">
+          <div class="ig-success-icon"><i class="fa-solid fa-circle-check"></i></div>
+          <h3>Conta conectada!</h3>
+          <p>Sua conta Instagram foi vinculada com sucesso. O bot já está monitorando seus comentários.</p>
+          <button class="btn-primary" id="ig-done-btn">
+            <i class="fa-solid fa-rocket"></i> Ir para o Dashboard
+          </button>
+        </div>
+      </div>
+  
+    </div>
+  </div>  
+
+  <div class="app-shell" style="display:none">
 
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
@@ -38,8 +196,11 @@
         </a>
       </nav>
       <div class="sidebar-footer">
-        <div class="status-dot online"></div>
-        <span class="status-label">Sistema operacional</span>
+        <div class="status-dot"></div>
+        <span class="status-label">Verificando…</span>
+        <button class="icon-btn logout-btn" id="logout-btn" title="Sair">
+          <i class="fa-solid fa-right-from-bracket"></i>
+        </button>
       </div>
     </aside>
 

@@ -1,9 +1,0 @@
-{
-  "scanInterval": 3,
-  "delay": 5,
-  "maxPerCycle": 10,
-  "maxChars": 200,
-  "readonly": false,
-  "replyOld": true,
-  "autoReply": false
-}

@@ -3,15 +3,27 @@ const path = require('path');
 const { launchBrowser, loadSession, getSessionPage } = require('./instagram');
 const { EventEmitter } = require('events');
 
-const DB_PATH = path.resolve('./comments.json');
+const DEFAULT_DB_PATH = path.resolve('./comments.json');
 
-function loadDB() {
-  if (!fs.existsSync(DB_PATH)) return {};
-  return JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
+function loadDB(commentsPath = DEFAULT_DB_PATH) {
+  if (!fs.existsSync(commentsPath)) return {};
+  return JSON.parse(fs.readFileSync(commentsPath, 'utf-8'));
 }
 
-function saveDB(db) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+function saveDB(db, commentsPath = DEFAULT_DB_PATH) {
+  const dir = path.dirname(commentsPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(commentsPath, JSON.stringify(db, null, 2));
+}
+
+function markAsReplied(db, key, replyText, commentsPath = DEFAULT_DB_PATH) {
+  if (!db[key]) return;
+
+  db[key].replied = true;
+  db[key].repliedAt = new Date().toISOString();
+  db[key].replyText = replyText;
+
+  saveDB(db, commentsPath);
 }
 
 function registerComment(db, comment) {
@@ -26,14 +38,6 @@ function registerComment(db, comment) {
     seenAt: new Date().toISOString(),
   };
   return true;
-}
-
-function markAsReplied(db, key, replyText) {
-  if (!db[key]) return;
-  db[key].replied = true;
-  db[key].repliedAt = new Date().toISOString();
-  db[key].replyText = replyText;
-  saveDB(db);
 }
 
 function getPendingComments(db) {
@@ -158,7 +162,6 @@ async function openCommentsTab(page, maxRetries = 3) {
 
     } catch (err) {
       console.warn(`[tab] ⚠️ Tentativa ${attempt} falhou: ${err.message}`);
-      await page.screenshot({ path: path.resolve(`./cu_${Date.now()}.png`), fullPage: true });
       if (attempt < maxRetries) {
         console.log('[tab] Recarregando...');
         try {
@@ -255,16 +258,48 @@ async function scrapeVisibleComments(page) {
         const timeLabel = abbrEl?.getAttribute('aria-label') || '';
 
         // Texto do comentário
-        const text = extractCommentText(container);
+        // Texto do comentário
+const text = extractCommentText(container);
 
-        if (!commentId) commentId = fakeId(username, postShortcode, text);
+if (!commentId) commentId = fakeId(username, postShortcode, text);
 
-        // Foto de perfil
-        const imgEl =
-          container.querySelector('img[alt$="\'s profile picture"]') ||
-          container.querySelector('img[alt*="profile picture"]') ||
-          container.querySelector('img[alt*="foto do perfil"]');
-        const profilePic = imgEl?.src || '';
+// Foto de perfil
+const profileImg = [...container.querySelectorAll('img')].find(img => {
+  const alt = (img.getAttribute('alt') || '').toLowerCase();
+  const src = img.getAttribute('src') || '';
+
+  const isProfilePic =
+    alt.includes('foto do perfil') ||
+    alt.includes('profile picture');
+
+  const isMediaThumb =
+    alt.includes('miniatura de mídia') ||
+    alt.includes('media thumbnail');
+
+  const looksLikeProfileUrl =
+    src.includes('/t51.82787-19/') ||
+    src.includes('profile_pic') ||
+    src.includes('s150x150');
+
+  return isProfilePic && !isMediaThumb && looksLikeProfileUrl;
+});
+
+const profilePic = profileImg?.src || '';
+
+if (username && postShortcode) {
+  results.push({
+    username,
+    text,
+    postShortcode,
+    postUrl,
+    thumbnailUrl,
+    postTitle: '',
+    commentId,
+    datetime: commentDatetime,
+    timeLabel,
+    profilePic,
+  });
+}
 
         if (username && postShortcode) {
           results.push({
@@ -283,100 +318,6 @@ async function scrapeVisibleComments(page) {
       } catch (e) {
         console.warn('[scrape] Erro ao processar container:', e.message);
       }
-    }
-
-    return results;
-  });
-
-  console.log(`[scrape] ${results.length} comentário(s) extraído(s).`);
-  return results;
-}
-
-async function scrapeVisibleComments(page) {
-  console.log('[scrape] Extraindo comentários visíveis...');
-
-  const results = await page.evaluate(() => {
-    function fakeId(username, postShortcode, text) {
-      const raw = `${username}::${postShortcode}::${text}`;
-      return 'fake_' + raw.split('').reduce((a, c) => Math.imul(31, a) + c.charCodeAt(0) | 0, 0).toString(36);
-    }
-
-    function extractCommentText(container) {
-      const mainSpan = container.querySelector('span[dir="auto"]');
-      if (!mainSpan) return '';
-      const clone = mainSpan.cloneNode(true);
-      clone.querySelectorAll('abbr, time').forEach(el => el.remove());
-      clone.querySelectorAll('[role="button"]').forEach(el => el.remove());
-      let raw = clone.innerText || clone.textContent || '';
-      raw = raw.replace(/^.*?(?:commented|comentou)\s*:\s*/i, '');
-      raw = raw.replace(/^@\S+\s*/, '');
-      raw = raw.replace(/\s*\d+[hdsm]\s*$/, '').replace(/\s*\d+\s+\w+\s+ago\s*$/i, '');
-      return raw.trim();
-    }
-
-    const results = [];
-    const containers = document.querySelectorAll('[data-pressable-container="true"]');
-
-    for (const container of containers) {
-      try {
-        const usernameEl = container.querySelector('span._ap3a._aaco._aacw._aacx._aad7._aade');
-        if (!usernameEl) continue;
-        const username = usernameEl.innerText.trim();
-        if (!username) continue;
-
-        const mediaLink =
-          container.querySelector('a[aria-label="Media thumbnail"]') ||
-          container.querySelector('a[aria-label="Miniatura de mídia"]');
-        if (!mediaLink) continue;
-
-        const postHref = mediaLink.getAttribute('href') || '';
-        const postMatch = postHref.match(/\/p\/([^/]+)\//);
-        if (!postMatch) continue;
-
-        const postShortcode = postMatch[1];
-        const postUrl = `https://www.instagram.com${postHref}`;
-
-        const thumbImg = mediaLink.querySelector('img');
-        const thumbnailUrl = thumbImg?.src || '';
-
-        const commentLink = container.querySelector('a[href*="/c/"]');
-        let commentId = '';
-        let commentDatetime = '';
-        if (commentLink) {
-          const href = commentLink.getAttribute('href') || '';
-          const cMatch = href.match(/\/c\/([^/]+)\//);
-          if (cMatch) commentId = cMatch[1];
-          const timeEl = commentLink.querySelector('time[datetime]');
-          if (timeEl) commentDatetime = timeEl.getAttribute('datetime') || '';
-        }
-
-        const abbrEl = container.querySelector('abbr[aria-label]');
-        const timeLabel = abbrEl?.getAttribute('aria-label') || '';
-
-        const text = extractCommentText(container);
-        if (!commentId) commentId = fakeId(username, postShortcode, text);
-
-        const imgEl =
-          container.querySelector('img[alt$="\'s profile picture"]') ||
-          container.querySelector('img[alt*="profile picture"]') ||
-          container.querySelector('img[alt*="foto do perfil"]');
-        const profilePic = imgEl?.src || '';
-
-        if (username && postShortcode) {
-          results.push({
-            username,
-            text,
-            postShortcode,
-            postUrl,
-            thumbnailUrl,
-            postTitle: '',
-            commentId,
-            datetime: commentDatetime,
-            timeLabel,
-            profilePic,
-          });
-        }
-      } catch (_) {}
     }
 
     return results;
@@ -567,8 +508,18 @@ const helperSrc = `
   }
 `;
 
-async function replyToComment(commentKey, replyText, { like = true, maxRetries = 3 } = {}) {
-  const db = loadDB();
+async function replyToComment(
+  commentKey,
+  replyText,
+  {
+    like = true,
+    maxRetries = 3,
+    commentsPath = DEFAULT_DB_PATH,
+    sessionPath = null,
+    userDataDir = null,
+  } = {}
+) {
+  const db = loadDB(commentsPath);
   const comment = db[commentKey];
 
   if (!comment) throw new Error('Comentário não encontrado: ' + commentKey);
@@ -579,7 +530,7 @@ async function replyToComment(commentKey, replyText, { like = true, maxRetries =
 
   const { username, text: commentText, postShortcode, commentId, datetime: commentDatetime } = comment;
   const isFakeId = commentId.startsWith('fake_');
-  const postUrl  = comment.postUrl || `https://www.instagram.com/p/${postShortcode}/`;
+  const postUrl = comment.postUrl || `https://www.instagram.com/p/${postShortcode}/`;
 
   console.log(`\n[reply] Iniciando resposta para @${username}`);
   console.log(`[reply] Post: ${postUrl}`);
@@ -587,10 +538,14 @@ async function replyToComment(commentKey, replyText, { like = true, maxRetries =
   console.log(`[reply] Texto do comentário: "${commentText}"`);
   console.log(`[reply] Resposta a postar: "${replyText.slice(0, 80)}"`);
 
-  // ── Usa sessão dedicada ao perfil 'reply' ──────────────────────────────────
   console.log('[reply] Abrindo sessão dedicada [reply]...');
-  const session = await getSessionPage('reply');
-  if (!session) throw new Error('Sem sessão reply. Rode: node instagram.js login-reply');
+
+  const session = await getSessionPage('reply', {
+    sessionPath,
+    userDataDir,
+  });
+
+  if (!session) throw new Error('Sem sessão reply. Conecte o Instagram novamente.');
 
   const { browser, page } = session;
   let lastError;
@@ -612,11 +567,13 @@ async function replyToComment(commentKey, replyText, { like = true, maxRetries =
 
         const currentUrl = page.url();
         console.log(`[reply] URL atual: ${currentUrl}`);
+
         if (currentUrl.includes('accounts.google.com') || currentUrl.includes('/accounts/login')) {
           throw new Error('Redirecionado para login — sessão reply expirada.');
         }
 
         console.log('[reply] Procurando container do comentário...');
+
         const clickResult = await page.evaluate(
           (target, doLike, src) => {
             eval(src);
@@ -625,32 +582,74 @@ async function replyToComment(commentKey, replyText, { like = true, maxRetries =
             const ok = clickContainer(container, doLike);
             return { clicked: ok, reason: ok ? 'ok' : 'botão Responder ausente no container' };
           },
-          { username, text: commentText, datetime: commentDatetime || '', commentId: isFakeId ? '' : commentId },
+          {
+            username,
+            text: commentText,
+            datetime: commentDatetime || '',
+            commentId: isFakeId ? '' : commentId,
+          },
           like,
           helperSrc
         );
 
         console.log(`[reply] Resultado do clique: clicked=${clickResult.clicked} | reason=${clickResult.reason}`);
+
         if (!clickResult.clicked) {
           throw new Error(`Botão "Responder" não encontrado para @${username}: ${clickResult.reason}`);
         }
 
         await sleep(1500);
 
-        console.log('[reply] Aguardando textarea...');
-        const textarea = await page.waitForSelector(
-          'textarea[placeholder="Adicione um comentário..."]',
-          { visible: true, timeout: 8000 }
-        );
+console.log('[reply] Aguardando textarea...');
 
-        await textarea.click();
-        await page.keyboard.press('End');
-        await textarea.type(' ' + replyText, { delay: 40 });
-        await sleep(500);
+const textarea = await page.waitForSelector(
+  'textarea[placeholder="Adicione um comentário..."]',
+  { visible: true, timeout: 8000 }
+);
 
-        console.log('[reply] Clicando em "Postar"...');
+// ── FIX: aguarda o Instagram preencher o @username na textarea ──────────
+// O Instagram injeta a menção de forma assíncrona após o clique em Responder.
+// Se digitarmos antes, sobrescrevemos ou perdemos o @username,
+// fazendo o reply virar um comentário solto em vez de reply encadeado.
+
+await page.waitForFunction(
+  () => {
+    const ta = document.querySelector('textarea[placeholder="Adicione um comentário..."]');
+    if (!ta) return false;
+    const val = ta.value.trim();
+    // Aguarda até ter algum conteúdo (o @username inserido pelo Instagram)
+    return val.length > 0;
+  },
+  { timeout: 6000 }
+).catch(() => {
+  // Se não preencheu em 6s, loga mas continua — melhor tentar do que abortar
+  console.warn('[reply] Timeout aguardando @mention na textarea. Continuando mesmo assim.');
+});
+
+// Garante foco e posiciona cursor no fim do conteúdo já existente
+await textarea.click();
+await page.keyboard.press('End');
+
+// Lê o que o Instagram já colocou na textarea (ex: "@username ")
+const existingText = await page.evaluate(() => {
+  const ta = document.querySelector('textarea[placeholder="Adicione um comentário..."]');
+  return ta ? ta.value : '';
+});
+
+console.log(`[reply] Conteúdo já na textarea: "${existingText.trim()}"`);
+
+// Se já tem o @mention, só adiciona o texto depois
+// Se não tem nada (fallback), digita normalmente
+const prefix = existingText.endsWith(' ') ? '' : ' ';
+await textarea.type(prefix + replyText, { delay: 40 });
+await sleep(500);
+
+console.log('[reply] Clicando em "Postar"...');
+
+
         const posted = await page.evaluate(() => {
-          const btn = [...document.querySelectorAll('[role="button"]')].find(b => b.innerText.trim() === 'Postar');
+          const btn = [...document.querySelectorAll('[role="button"]')]
+            .find(b => b.innerText.trim() === 'Postar');
           if (!btn) return false;
           btn.click();
           return true;
@@ -659,7 +658,9 @@ async function replyToComment(commentKey, replyText, { like = true, maxRetries =
         if (!posted) throw new Error('Botão "Postar" não encontrado.');
 
         await sleep(2000);
-        markAsReplied(db, commentKey, replyText);
+
+        markAsReplied(db, commentKey, replyText, commentsPath);
+
         console.log(`[reply] ✅ Resposta postada com sucesso para @${username}!`);
         return;
       } catch (err) {
@@ -675,153 +676,200 @@ async function replyToComment(commentKey, replyText, { like = true, maxRetries =
   throw new Error(`Falha após ${maxRetries} tentativas. Último erro: ${lastError?.message}`);
 }
 
-async function fetchComments({ scrolls = 5 } = {}) {
-  const session = await getSessionPage();
-  if (!session) return;
-  const { browser, page } = session;
+async function fetchComments({
+  page = null,
+  browser = null,
+  scrolls = 5,
+  sessionPath = null,
+  userDataDir = null,
+  commentsPath = DEFAULT_DB_PATH,
+} = {}) {
+  let ownBrowser = false;
+
+  if (!page) {
+    const session = await getSessionPage('monitor', { sessionPath, userDataDir });
+    if (!session) return;
+
+    browser = session.browser;
+    page = session.page;
+    ownBrowser = true;
+  }
 
   try {
-    await page.goto('https://www.instagram.com/', { waitUntil: 'networkidle2' });
+    await page.goto('https://www.instagram.com/', {
+      waitUntil: 'networkidle2',
+      timeout: 30000,
+    });
+
     await openCommentsTab(page);
     await scrollPanel(page, scrolls);
+
     const scraped = await scrapeVisibleComments(page);
 
-    const db = loadDB();
+    const db = loadDB(commentsPath);
     let newCount = 0;
+
     for (const c of scraped) {
       if (registerComment(db, c)) newCount++;
     }
-    saveDB(db);
+
+    saveDB(db, commentsPath);
 
     const pending = getPendingComments(db);
+
     console.log(`\n📊 Resultado:`);
     console.log(`   Novos    : ${newCount}`);
     console.log(`   Pendentes: ${pending.length}`);
-    console.log(`   Total    : ${Object.keys(db).length}`);
+    console.log(`   Total    : ${Object.keys(db).filter(k => !k.startsWith('__')).length}`);
+    console.log(`   DB       : ${commentsPath}`);
 
-    if (pending.length > 0) {
-      console.log('\n📋 Pendentes:');
-      pending.forEach((c, i) =>
-        console.log(`  [${i + 1}] @${c.username} → /p/${c.postShortcode}/c/${c.commentId}/ — "${c.text}"`)
-      );
-    }
-
-    return { scraped, pending, db };
+    return { scraped, pending, db, newCount };
   } finally {
-    await browser.close();
+    if (ownBrowser && browser) {
+      await browser.close();
+    }
   }
 }
 
 async function watchComments({
-  intervalMs   = 60_000,
-  scrolls      = 5,
-  autoReply    = false,
-  replyFn      = null,
+  intervalMs = 60_000,
+  scrolls = 5,
+  autoReply = false,
+  replyFn = null,
   replyDelayMs = 8_000,
+  sessionPath = null,
+  userDataDir = null,
+  commentsPath = DEFAULT_DB_PATH,
+  replySessionPath = null,
+  replyUserDataDir = null,
 } = {}) {
   const emitter = new EventEmitter();
-  let running   = true;
-  let session   = null;
 
-  async function ensureSession() {
-    if (session) {
-      try { await session.page.evaluate(() => true); return session; }
-      catch { console.warn('⚠️  Sessão monitor perdida — reabrindo...'); session = null; }
-    }
-    session = await getSessionPage('monitor'); // ← alterado
-    if (!session) throw new Error('Não foi possível abrir sessão monitor.');
-    console.log('🟢 Sessão [monitor] de monitoramento aberta.');
-    return session;
-  }
+  let running      = true;
+  let timer        = null;
+  let tickPromise  = null;   // mutex: nunca dois ticks em paralelo
 
   async function tick() {
-    console.log('\n[tick] ── Iniciando varredura ──────────────────────');
-    try {
-      const activeSession = await ensureSession();
-      const { page } = activeSession;
+    if (!running) return;
 
-      await page.goto('https://www.instagram.com/', { waitUntil: 'networkidle2' });
+    // ── Mutex: aguarda tick anterior terminar antes de iniciar novo ──────────
+    if (tickPromise) {
+      console.log('[watch] Tick aguardando varredura anterior terminar...');
+      await tickPromise.catch(() => {});
+      if (!running) return;
+    }
+
+    tickPromise = _doTick();
+    try   { await tickPromise; }
+    catch (_) { /* erros já emitidos dentro de _doTick */ }
+    finally { tickPromise = null; }
+  }
+
+  async function _doTick() {
+    let browser = null;
+
+    console.log('\n[tick] ── Iniciando varredura temporária ──────────────────────');
+
+    try {
+      const session = await getSessionPage('monitor', { sessionPath, userDataDir });
+      if (!session) throw new Error(`Não foi possível abrir sessão monitor. Caminho: ${sessionPath}`);
+
+      browser = session.browser;
+      const page = session.page;
+
+      try {
+        await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      } catch (err) {
+        console.warn('[watch] Falha/timeout ao abrir Instagram, tentando continuar:', err.message);
+        try { await page.evaluate(() => window.stop()); } catch (_) {}
+      }
+
+      await sleep(3000);
       await openCommentsTab(page);
       await scrollPanel(page, scrolls);
 
       const scraped = await scrapeVisibleComments(page);
-      const db      = loadDB();
+      const db      = loadDB(commentsPath);
       const newOnes = [];
 
       for (const c of scraped) {
         if (registerComment(db, c)) newOnes.push(c);
       }
-      saveDB(db);
+      saveDB(db, commentsPath);
 
       const pending = getPendingComments(db);
-      console.log(`[tick] Novos: ${newOnes.length} | Pendentes: ${pending.length} | Total: ${Object.keys(db).filter(k => !k.startsWith('__')).length}`);
+      const total   = Object.keys(db).filter(k => !k.startsWith('__')).length;
 
       emitter.emit('tick', {
         newCount    : newOnes.length,
         pendingCount: pending.length,
-        totalCount  : Object.keys(db).filter(k => !k.startsWith('__')).length,
+        totalCount  : total,
         at          : new Date().toISOString(),
       });
 
-      if (newOnes.length > 0) {
-        console.log(`\n🆕 ${newOnes.length} novo(s):`);
-        newOnes.forEach(c => console.log(`   @${c.username}: "${c.text}"`));
-        emitter.emit('new', newOnes);
-      }
+      if (newOnes.length > 0) emitter.emit('new', newOnes);
+
+      console.log(`[watch] Coletados: ${scraped.length} | Novos: ${newOnes.length} | Pendentes: ${pending.length}`);
 
       if (autoReply && replyFn) {
-        const freshPending = getPendingComments(loadDB());
-        console.log(`[tick] autoReply ativado — ${freshPending.length} pendente(s) para responder.`);
-
+        const freshPending = getPendingComments(loadDB(commentsPath));
         for (const comment of freshPending) {
           if (!running) break;
           try {
-            console.log(`\n[tick] Gerando resposta IA para @${comment.username}...`);
             const replyText = await replyFn(comment);
-            if (!replyText) {
-              console.warn(`[tick] replyFn retornou vazio para @${comment.username}, pulando.`);
-              continue;
-            }
-            console.log(`[tick] Resposta gerada: "${replyText.slice(0, 80)}"`);
-            console.log(`[tick] Chamando replyToComment para @${comment.username}...`);
-            await replyToComment(comment.key, replyText); // usa sessão 'reply' internamente
-            console.log(`[tick] ✅ @${comment.username} respondido. Aguardando ${replyDelayMs}ms...`);
+            if (!replyText) continue;
+            await replyToComment(comment.key, replyText, {
+              commentsPath,
+              sessionPath : replySessionPath,
+              userDataDir : replyUserDataDir,
+            });
             await sleep(replyDelayMs);
           } catch (err) {
-            console.error(`[tick] ❌ Erro ao responder @${comment.username}: ${err.message}`);
             emitter.emit('error', err);
           }
         }
       }
 
       console.log('[tick] ── Varredura concluída ───────────────────────\n');
+      return { newCount: newOnes.length, pendingCount: pending.length };
+
     } catch (err) {
       console.error(`❌ Erro na varredura: ${err.message}`);
       emitter.emit('error', err);
-      if (session) { try { await session.browser.close(); } catch {} session = null; }
+      throw err;
+    } finally {
+      if (browser) {
+        try { await browser.close(); console.log('[watch] Navegador monitor fechado.'); }
+        catch (_) {}
+      }
     }
   }
 
-  console.log(`👁️  Monitoramento iniciado [monitor]. Intervalo: ${intervalMs / 1000}s`);
-  await tick();
+  console.log(`👁️ Monitoramento iniciado. Intervalo: ${intervalMs / 1000}s`);
 
-  const timer = setInterval(async () => { if (running) await tick(); }, intervalMs);
+  tick(); // primeira execução imediata
+  timer = setInterval(() => tick(), intervalMs);
 
   return {
+    on : emitter.on.bind(emitter),
+    off: emitter.off.bind(emitter),
+
+    // Dispara uma varredura imediata e aguarda — usado por /api/scan
+    // quando o bot já está rodando, evitando abrir segundo browser no mesmo userDataDir
+    scanNow: () => tick(),
+
     stop: async () => {
       running = false;
-      clearInterval(timer);
-      if (session) { try { await session.browser.close(); } catch {} session = null; }
+      if (timer) { clearInterval(timer); timer = null; }
+      if (tickPromise) await tickPromise.catch(() => {});
       console.log('🔴 Monitoramento encerrado.');
     },
-    on        : emitter.on.bind(emitter),
-    off       : emitter.off.bind(emitter),
-    getSession: () => session,
   };
 }
 
+
 async function replyAllPending(replyFn, delayMs = 8000) {
-  const db = loadDB();
+  const db = loadDB(commentsPath);
   const pending = getPendingComments(db);
 
   if (pending.length === 0) { console.log('✅ Nenhum comentário pendente.'); return; }
@@ -834,7 +882,6 @@ async function replyAllPending(replyFn, delayMs = 8000) {
     await sleep(delayMs);
   }
 }
-
 
 module.exports = {
   fetchComments,

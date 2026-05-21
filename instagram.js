@@ -1,3 +1,4 @@
+//instagram.js
 const puppeteer = require('puppeteer');
 const readline  = require('readline');
 const fs        = require('fs');
@@ -14,32 +15,43 @@ const USER_DATA_DIR_REPLY = path.resolve('./chrome_profile_reply');
 const SEL = {
   username:   'input[name="email"]',
   password:   'input[name="pass"]',
-  // submit pode ser <button type="submit"> ou <div role="button" aria-label="Log In|Entrar">
   loginBtn:   'button[type="submit"], [role="button"][aria-label="Log In"], [role="button"][aria-label="Entrar"]',
   twoFaInput: 'input[name="verificationCode"]',
-  // home detectada pela URL ou pelo ícone de notificações (EN e PT)
   successEl:  'svg[aria-label="Home"], svg[aria-label="Início"], svg[aria-label="Notifications"], svg[aria-label="Notificações"]',
   errorAlert: '#twoFactorErrorAlert',
 };
 
 // ─── Launch ───────────────────────────────────────────────────────────────────
 
-async function launchBrowser(headless = false, userDataDir = USER_DATA_DIR) {
+async function launchBrowser(headless = true, userDataDir = USER_DATA_DIR) {
+  const isWindows = process.platform === 'win32';
+
+  const args = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-infobars',
+    '--window-size=1280,800',
+  ];
+
+  // --single-process e --no-zygote são flags Linux/Docker
+  // No Windows causam crash imediato do frame
+  if (!isWindows) {
+    args.push('--no-zygote', '--single-process');
+  }
+
   return puppeteer.launch({
-    headless: "new",
+    headless: headless ? 'new' : false,
     userDataDir,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-      '--start-maximized',
-    ],
+    args,
     defaultViewport: { width: 1280, height: 800 },
+    // No Windows o Puppeteer às vezes não acha o Chrome — garante o caminho
+    // Se der erro de executablePath, descomente e ajuste:
+    // executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   });
 }
+
 
 // ─── Session helpers ──────────────────────────────────────────────────────────
 
@@ -150,9 +162,64 @@ async function login(profile = 'monitor') {
 
     // 4. Aguarda sucesso OU tela de 2FA
     const result = await Promise.race([
-      page.waitForSelector(SEL.successEl,  { timeout: 30_000 }).then(() => 'success'),
+      page.waitForSelector(SEL.successEl, { timeout: 30_000 }).then(() => 'success'),
+    
       page.waitForSelector(SEL.twoFaInput, { timeout: 30_000 }).then(() => '2fa'),
+    
+      page.waitForFunction(() => {
+        // Log do link de reset
+        const resetLink = document.querySelector('a[href*="/accounts/password/reset/"]');
+        if (resetLink) {
+          console.__orig?.call(console, '[CRED_CHECK] reset link encontrado:', resetLink.href);
+          return true;
+        }
+      
+        // Log do texto bruto da página
+        const text = document.body?.innerText || '';
+        console.__orig?.call(console, '[CRED_CHECK] innerText (primeiros 300):', text.slice(0, 300));
+      
+        return (
+          text.includes('login information you entered is incorrect') ||
+          text.includes('informações de login que você inseriu estão incorretas') ||
+          text.includes('password you entered is incorrect') ||
+          text.includes('your password was incorrect')
+        );
+      }, { timeout: 30_000 }).then(() => 'wrong_credentials'),
+      
     ]).catch(() => 'timeout');
+    
+    if (result === 'success') {
+      console.log('✅ Login bem-sucedido sem 2FA!');
+      await saveSession(page, sessionPath);
+      return;
+    }
+    
+    if (result === 'wrong_credentials') {
+      console.error('❌ Credenciais inválidas. Verifique usuário, e-mail, número ou senha.');
+      return;
+    }
+    
+    if (result === 'timeout') {
+      console.error('❌ Timeout: nem sucesso, nem tela de 2FA, nem erro de credenciais foram detectados.');
+      return;
+    }
+
+    if (result === 'success') {
+      console.log('✅ Login bem-sucedido sem 2FA!');
+      await saveSession(page, sessionPath);
+      return;
+    }
+
+    if (result === 'wrong_credentials') {
+      console.error('❌ Credenciais inválidas. Verifique usuário e senha.');
+      return;
+    }
+
+    if (result === 'timeout') {
+      console.error('❌ Timeout: nem sucesso nem tela de 2FA detectados.');
+      return;
+    }
+
 
     if (result === 'success') {
       console.log('✅ Login bem-sucedido sem 2FA!');
@@ -303,30 +370,348 @@ async function login(profile = 'monitor') {
  * Abre uma sessão autenticada.
  * @param {'monitor' | 'reply'} profile
  */
-async function getSessionPage(profile = 'monitor') {
-  const isReply     = profile === 'reply';
-  const sessionPath = isReply ? SESSION_REPLY_PATH : SESSION_PATH;
-  const userDataDir = isReply ? USER_DATA_DIR_REPLY : USER_DATA_DIR;
+async function getSessionPage(profile = 'monitor', opts = {}) {
+  const isReply = profile === 'reply';
+
+  const sessionPath =
+    opts.sessionPath ||
+    (isReply ? SESSION_REPLY_PATH : SESSION_PATH);
+
+  const userDataDir =
+    opts.userDataDir ||
+    (isReply ? USER_DATA_DIR_REPLY : USER_DATA_DIR);
 
   const browser = await launchBrowser(true, userDataDir);
-  const page    = await browser.newPage();
+  const page = await browser.newPage();
 
   const loaded = await loadSession(page, sessionPath);
   if (!loaded) {
-    console.error(`❌ Sem sessão salva para [${profile}]. Rode: node instagram.js login-${profile}`);
+    console.error(`❌ Sem sessão salva para [${profile}] em: ${sessionPath}`);
     await browser.close();
     return null;
   }
 
   const loggedIn = await isLoggedIn(page);
   if (!loggedIn) {
-    console.error(`❌ Sessão [${profile}] expirada. Rode: node instagram.js login-${profile}`);
+    console.error(`❌ Sessão [${profile}] expirada em: ${sessionPath}`);
     await browser.close();
     return null;
   }
 
-  console.log(`🟢 Sessão [${profile}] aberta com sucesso.`);
+  console.log(`🟢 Sessão [${profile}] aberta com sucesso: ${sessionPath}`);
   return { browser, page };
+}
+
+// ─── Multi-user session helpers ───────────────────────────────────────────────
+
+/**
+ * Mapa interno de sessões pendentes de 2FA.
+ * Chave: `${userId}:${profile}`
+ */
+const _pendingMap = new Map();
+
+/**
+ * Inicia login para um perfil de um usuário específico,
+ * usando caminhos de sessão/userDataDir fornecidos externamente.
+ *
+ * @param {object} opts
+ * @param {string} opts.userId
+ * @param {string} opts.username
+ * @param {string} opts.password
+ * @param {'monitor'|'reply'} opts.profile
+ * @param {string} opts.sessionPath   - caminho absoluto para o session.json do usuário
+ * @param {string} opts.userDataDir   - caminho absoluto para o chrome profile do usuário
+ * @returns {Promise<{requires2FA: boolean, profile: string}>}
+ */
+async function loginProfile({ userId, username, password, profile, sessionPath, userDataDir }) {
+  const prevKey = `${userId}:${profile}`;
+  const prev = _pendingMap.get(prevKey);
+  if (prev) { try { await prev.browser.close(); } catch (_) {} _pendingMap.delete(prevKey); }
+
+  console.log(`[${profile}] launchBrowser userDataDir=${userDataDir}`);
+  const browser = await launchBrowser(true, userDataDir);
+
+  // Detecta se o browser caiu sozinho
+  browser.on('disconnected', () => {
+    console.error(`[${profile}] ⚠️  Browser DISCONNECTED inesperadamente`);
+  });
+
+  const pages = await browser.pages();
+  const page  = pages[0] || await browser.newPage();
+
+  // Captura erros de frame/página
+  page.on('error',           err => console.error(`[${profile}] page error: ${err.message}`));
+  page.on('framedetached',   frm => console.warn (`[${profile}] frame detached: ${frm.url()}`));
+  page.on('framenavigated',  frm => console.log  (`[${profile}] frame navigated: ${frm.url()}`));
+
+  try {
+    console.log(`[${profile}] STEP 1 — goto login page`);
+    await page.goto('https://www.instagram.com/accounts/login/', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30_000,
+    });
+    console.log(`[${profile}] STEP 1 OK — url: ${page.url()}`);
+
+    await sleep(2000);
+
+    console.log(`[${profile}] STEP 2 — procura botão "Log in" inicial`);
+    const logInBtn = await page.evaluateHandle(() => {
+      const btns = [...document.querySelectorAll('button[type="button"]')];
+      return btns.find(b => /^(log\s*in|entrar)$/i.test(b.innerText.trim())) ?? null;
+    }).then(h => h?.asElement()).catch(() => null);
+    if (logInBtn) { await logInBtn.click(); await sleep(1000); }
+    console.log(`[${profile}] STEP 2 OK — logInBtn: ${!!logInBtn}`);
+
+    console.log(`[${profile}] STEP 3 — waitForSelector username`);
+    await page.waitForSelector(SEL.username, { timeout: 30_000, visible: true });
+    console.log(`[${profile}] STEP 3 OK`);
+
+    await sleep(300);
+    await page.type(SEL.username, username, { delay: 55 });
+
+    console.log(`[${profile}] STEP 4 — waitForSelector password`);
+    await page.waitForSelector(SEL.password, { timeout: 10_000 });
+    console.log(`[${profile}] STEP 4 OK`);
+
+    await page.type(SEL.password, password, { delay: 55 });
+    await sleep(400);
+
+    console.log(`[${profile}] STEP 5 — waitForSelector loginBtn`);
+    await page.waitForSelector(SEL.loginBtn, { timeout: 10_000 });
+    console.log(`[${profile}] STEP 5 OK`);
+
+    console.log(`[${profile}] STEP 6 — click loginBtn`);
+    await page.click(SEL.loginBtn);
+    console.log(`[${profile}] STEP 6 OK — aguardando outcome...`);
+
+    const outcome = await Promise.race([
+      page.waitForSelector(SEL.successEl,  { timeout: 30_000 }).then(() => 'success'),
+      page.waitForSelector(SEL.twoFaInput, { timeout: 30_000 }).then(() => '2fa'),
+
+      new Promise((resolve) => {
+        let stopped = false;
+        const poll = async () => {
+          while (!stopped) {
+            try {
+              const found = await page.evaluate(() => {
+                const text = document.body?.innerText || '';
+                return (
+                  text.includes('login information you entered is incorrect') ||
+                  text.includes('informações de login que você inseriu estão incorretas') ||
+                  text.includes('The login information you entered is incorrect') ||
+                  text.includes('As informações de login que você inseriu estão incorretas')
+                );
+              });
+              if (found) { stopped = true; resolve('wrong_credentials'); return; }
+            } catch (_) {}
+            await sleep(500);
+          }
+        };
+        poll();
+        setTimeout(() => { stopped = true; }, 31_000);
+      }),
+    ]).catch(err => {
+      console.error(`[${profile}] race erro: ${err.message}`);
+      return 'timeout';
+    });
+
+    console.log(`[${profile}] STEP 7 — outcome: ${outcome} | url: ${page.url()}`);
+
+    if (outcome === 'wrong_credentials') {
+      await browser.close();
+      throw Object.assign(new Error('Credenciais inválidas.'), { code: 'WRONG_CREDENTIALS' });
+    }
+    if (outcome === 'timeout') {
+      await browser.close();
+      throw Object.assign(new Error(`[${profile}] Sem resposta do Instagram.`), { code: 'TIMEOUT' });
+    }
+    if (outcome === '2fa') {
+      _pendingMap.set(prevKey, { browser, page, sessionPath, username });
+      return { requires2FA: true, profile };
+    }
+
+    // success
+    await saveSession(page, sessionPath);
+    await browser.close();
+    return { requires2FA: false, profile };
+
+  } catch (err) {
+    console.error(`[${profile}] FALHOU no step — ${err.message}`);
+    console.error(`[${profile}] stack: ${err.stack?.split('\n')[1]}`);
+
+    if (err.code !== 'WRONG_CREDENTIALS') {
+      try { await browser.close(); } catch (_) {}
+    }
+    _pendingMap.delete(prevKey);
+    throw err;
+  }
+}
+
+
+/**
+ * Faz login nos dois perfis (monitor + reply) para um usuário.
+ * Retorna `{ requires2FA: true }` se qualquer um precisar de 2FA.
+ *
+ * @param {object} opts
+ * @param {string} opts.userId
+ * @param {string} opts.username
+ * @param {string} opts.password
+ * @param {function} opts.getSessionPath  - (userId, profile) => string
+ * @param {function} opts.getUserDataDir  - (userId, profile) => string
+ */
+async function connectUser({ userId, username, password, getSessionPath, getUserDataDir }) {
+  // 1. Login do perfil monitor
+  const monitorResult = await loginProfile({
+    userId, username, password,
+    profile: 'monitor',
+    sessionPath: getSessionPath(userId, 'monitor'),
+    userDataDir: getUserDataDir(userId, 'monitor'),
+  });
+
+  // 2. Se monitor precisar de 2FA, para aqui e aguarda verify2FAUser ser chamado
+  //    O caller deve verificar requires2FA e só continuar após resolver
+  if (monitorResult.requires2FA) {
+    // Armazena credenciais para reuso no reply após o 2FA
+    _pendingMap.set(`${userId}:_credentials`, { username, password, getSessionPath, getUserDataDir });
+    return { requires2FA: true, pendingProfile: 'monitor', username };
+  }
+
+  // 3. Monitor ok sem 2FA — login do reply imediatamente
+  const replyResult = await loginProfile({
+    userId, username, password,
+    profile: 'reply',
+    sessionPath: getSessionPath(userId, 'reply'),
+    userDataDir: getUserDataDir(userId, 'reply'),
+  });
+
+  if (replyResult.requires2FA) {
+    _pendingMap.set(`${userId}:_credentials`, { username, password, getSessionPath, getUserDataDir });
+    return { requires2FA: true, pendingProfile: 'reply', username };
+  }
+
+  return { requires2FA: false, username };
+}
+
+
+/**
+ * Verifica o código 2FA para um perfil específico de um usuário.
+ *
+ * @param {string} userId
+ * @param {'monitor'|'reply'} profile
+ * @param {string} code
+ */
+async function verify2FAProfile(userId, profile, code) {
+  const key     = `${userId}:${profile}`;
+  const session = _pendingMap.get(key);
+  if (!session) throw new Error(`Nenhuma sessão 2FA pendente para [${profile}].`);
+
+  const { browser, page, sessionPath } = session;
+
+  try {
+    await page.click(SEL.twoFaInput, { clickCount: 3 });
+    await page.type(SEL.twoFaInput, code.trim(), { delay: 70 });
+    await sleep(300);
+
+    const confirmEl = await page.evaluateHandle(() => {
+      const b = [...document.querySelectorAll('[role="button"]')];
+      return b.find(x => /^(confirm|confirmar)$/i.test(x.innerText.trim())) ?? null;
+    }).then(h => h?.asElement()).catch(() => null);
+
+    if (confirmEl) await confirmEl.click();
+    else await page.keyboard.press('Enter');
+
+    const r = await Promise.race([
+      page.waitForSelector(SEL.successEl, { timeout: 15_000 }).then(() => 'success'),
+      page.waitForFunction(
+        sel => { const n = document.querySelector(sel); return n && n.textContent.trim() !== 'SMS enviado.'; },
+        { timeout: 15_000 }, SEL.errorAlert
+      ).then(() => 'error'),
+    ]).catch(() => 'timeout');
+
+    if (r === 'error') {
+      const msg = await page.$eval(SEL.errorAlert, e => e.textContent.trim()).catch(() => '');
+      // NÃO fecha o browser — permite nova tentativa
+      throw Object.assign(new Error(msg || `[${profile}] Código inválido ou expirado.`), { code: 'INVALID_2FA' });
+    }
+
+    if (r === 'timeout') {
+      const ok = await page.$(SEL.successEl).then(e => !!e).catch(() => false);
+      if (!ok) throw Object.assign(new Error(`[${profile}] Tempo esgotado.`), { code: 'TIMEOUT' });
+    }
+
+    await saveSession(page, sessionPath);
+    _pendingMap.delete(key);
+    await browser.close();
+
+  } catch (err) {
+    // Só limpa se não for erro de código inválido (para permitir nova tentativa)
+    if (err.code !== 'INVALID_2FA') {
+      try { await browser.close(); } catch (_) {}
+      _pendingMap.delete(key);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Verifica 2FA nos dois perfis simultaneamente.
+ *
+ * @param {string} userId
+ * @param {string} code
+ * @returns {Promise<{ok: boolean, username: string|null}>}
+ */
+async function verify2FAUser(userId, code) {
+  const hasMon   = _pendingMap.has(`${userId}:monitor`);
+  const hasReply = _pendingMap.has(`${userId}:reply`);
+
+  if (!hasMon && !hasReply) throw new Error('Nenhuma sessão 2FA pendente. Reinicie o processo.');
+
+  // Valida o perfil que está pendente de 2FA
+  const pendingProfile = hasMon ? 'monitor' : 'reply';
+  await verify2FAProfile(userId, pendingProfile, code);
+
+  // Se era o monitor, agora conecta o reply com as credenciais salvas
+  if (pendingProfile === 'monitor') {
+    const creds = _pendingMap.get(`${userId}:_credentials`);
+    if (creds) {
+      _pendingMap.delete(`${userId}:_credentials`);
+      const { username, password, getSessionPath, getUserDataDir } = creds;
+
+      const replyResult = await loginProfile({
+        userId, username, password,
+        profile: 'reply',
+        sessionPath: getSessionPath(userId, 'reply'),
+        userDataDir: getUserDataDir(userId, 'reply'),
+      });
+
+      // Reply também pode pedir 2FA (conta com 2FA em ambos os perfis é raro mas possível)
+      if (replyResult.requires2FA) {
+        _pendingMap.set(`${userId}:_credentials`, creds);
+        return { ok: false, requires2FA: true, pendingProfile: 'reply' };
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+
+/**
+ * Tenta reenviar o SMS/código 2FA clicando no botão da página pendente.
+ *
+ * @param {string} userId
+ * @param {'monitor'|'reply'} [profile='monitor']
+ * @returns {Promise<boolean>}
+ */
+async function resend2FA(userId, profile = 'monitor') {
+  const session = _pendingMap.get(`${userId}:${profile}`);
+  if (!session) return false;
+  return session.page.evaluate(() => {
+    const el = [...document.querySelectorAll('button,[role="button"],a')]
+      .find(b => /(send sms|resend|reenviar|enviar sms)/i.test(b.innerText));
+    if (el) { el.click(); return true; }
+    return false;
+  }).catch(() => false);
 }
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
@@ -351,4 +736,9 @@ module.exports = {
   SESSION_REPLY_PATH,
   USER_DATA_DIR,
   USER_DATA_DIR_REPLY,
+  loginProfile,
+  connectUser,
+  verify2FAProfile,
+  verify2FAUser,
+  resend2FA,
 };

@@ -23,6 +23,339 @@ const state = {
   logs: [],
 };
 
+const auth = {
+  get token()    { return localStorage.getItem('co_token'); },
+  get user()     { return JSON.parse(localStorage.getItem('co_user') || 'null'); },
+  get igLinked() { return localStorage.getItem('co_ig_linked') === '1'; },
+  save(token, user) {
+    localStorage.setItem('co_token', token);
+    localStorage.setItem('co_user', JSON.stringify(user));
+  },
+  linkIg()  { localStorage.setItem('co_ig_linked', '1'); },
+  clear()   { ['co_token','co_user','co_ig_linked'].forEach(k => localStorage.removeItem(k)); },
+  isLoggedIn() { return !!this.token; },
+};
+
+/* ── Mostrar / ocultar as telas ─────────────────────────── */
+function showApp() {
+  document.getElementById('auth-screen').style.display  = 'none';
+  document.querySelector('.app-shell').style.display     = '';
+}
+
+function showAuthScreen() {
+  document.getElementById('auth-screen').style.display  = '';
+  document.querySelector('.app-shell').style.display     = 'none';
+}
+
+/* ── Helpers UI ─────────────────────────────────────────── */
+function setAuthError(elId, msg) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.classList.toggle('hidden', !msg);
+  el.innerHTML = msg ? `<i class="fa-solid fa-circle-exclamation"></i> ${msg}` : '';
+}
+
+function setLoading(btn, loading, label) {
+  btn.disabled = loading;
+  btn.innerHTML = loading
+    ? '<i class="fa-solid fa-circle-notch fa-spin"></i> Aguarde…'
+    : label;
+}
+
+/* ── Toggle senha visível ───────────────────────────────── */
+function initPasswordToggles() {
+  document.querySelectorAll('.toggle-pw').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const input = btn.closest('.input-password-wrap').querySelector('input');
+      const show  = input.type === 'password';
+      input.type  = show ? 'text' : 'password';
+      btn.querySelector('i').className = show ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye';
+    });
+  });
+}
+
+/* ── Tabs login / registro ──────────────────────────────── */
+function initAuthTabs() {
+  document.querySelectorAll('.auth-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const target = tab.dataset.tab;
+      document.getElementById('tab-login').classList.toggle('hidden',    target !== 'login');
+      document.getElementById('tab-register').classList.toggle('hidden', target !== 'register');
+      setAuthError('login-error', '');
+      setAuthError('reg-error', '');
+    });
+  });
+}
+
+/* ── LOGIN ──────────────────────────────────────────────── */
+async function handleLogin() {
+  const email    = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const btn      = document.getElementById('btn-login');
+
+  setAuthError('login-error', '');
+  if (!email || !password) { setAuthError('login-error', 'Preencha e-mail e senha.'); return; }
+
+  setLoading(btn, true, '<i class="fa-solid fa-right-to-bracket"></i> Entrar');
+  try {
+    const data = await apiFetch('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    auth.save(data.token, data.user);
+    onLoginSuccess(false);
+  } catch (e) {
+    setAuthError('login-error', e.message || 'Credenciais inválidas.');
+  } finally {
+    setLoading(btn, false, '<i class="fa-solid fa-right-to-bracket"></i> Entrar');
+  }
+}
+
+/* ── REGISTRO ───────────────────────────────────────────── */
+async function handleRegister() {
+  const name     = document.getElementById('reg-name').value.trim();
+  const email    = document.getElementById('reg-email').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const confirm  = document.getElementById('reg-confirm').value;
+  const btn      = document.getElementById('btn-register');
+
+  setAuthError('reg-error', '');
+
+  if (!name || !email || !password || !confirm) {
+    setAuthError('reg-error', 'Preencha todos os campos.'); return;
+  }
+  if (password.length < 8) {
+    setAuthError('reg-error', 'A senha deve ter pelo menos 8 caracteres.'); return;
+  }
+  if (password !== confirm) {
+    setAuthError('reg-error', 'As senhas não coincidem.'); return;
+  }
+
+  setLoading(btn, true, '<i class="fa-solid fa-user-plus"></i> Criar conta');
+  try {
+    const data = await apiFetch('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password }),
+    });
+    auth.save(data.token, data.user);
+    onLoginSuccess(true);           // true = primeiro login → pede Instagram
+  } catch (e) {
+    setAuthError('reg-error', e.message || 'Erro ao criar conta.');
+  } finally {
+    setLoading(btn, false, '<i class="fa-solid fa-user-plus"></i> Criar conta');
+  }
+}
+
+/* ── Pós-login ──────────────────────────────────────────── */
+async function onLoginSuccess(firstTime) {
+  showApp();
+
+  // Busca o status real do Instagram no servidor
+  try {
+    const { user } = await apiFetch('/api/auth/me');
+    renderIgStatus(user);
+
+    if (!user.igLinked) {
+      openIgConnectModal(false); // sem Instagram — mostra credenciais
+    } else if (firstTime) {
+      openIgConnectModal(true);  // já vinculado — vai direto ao sucesso
+    }
+  } catch (_) {
+    // fallback silencioso
+    if (firstTime || !auth.igLinked) openIgConnectModal(false);
+  }
+}
+
+
+/* ── LOGOUT ─────────────────────────────────────────────── */
+function handleLogout() {
+  auth.clear();
+  showAuthScreen();
+}
+
+/* ── Enter para submeter ────────────────────────────────── */
+function initAuthEnterKey() {
+  document.getElementById('login-password')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') handleLogin();
+  });
+  document.getElementById('reg-confirm')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') handleRegister();
+  });
+}
+
+/* MODAL: Conectar Instagram */
+
+function openIgConnectModal(alreadyLinked = false) {
+  if (alreadyLinked) {
+    igShowStep('success');
+  } else {
+    igShowStep('credentials');
+  }
+  document.getElementById('ig-connect-overlay').classList.remove('hidden');
+}
+
+function renderIgStatus(user) {
+  // Atualiza o objeto de auth em memória para reflexo imediato
+  if (user) auth.save(auth.token, user);
+
+  const linked   = user?.igLinked ?? auth.user?.igLinked ?? false;
+  const username = user?.igUsername ?? auth.user?.igUsername ?? null;
+
+  // ── Dot + label na sidebar footer ──────────────────────────
+  const dot   = document.querySelector('.sidebar-footer .status-dot');
+  const label = document.querySelector('.sidebar-footer .status-label');
+
+  if (dot) {
+    dot.className = `status-dot ${linked ? 'online' : 'offline'}`;
+  }
+  if (label) {
+    label.textContent = linked
+      ? (username ? `@${username}` : 'Instagram conectado')
+      : 'Instagram desconectado';
+  }
+
+  // ── Badge no nav-item de Configurações (opcional, remove se não quiser) ─
+  const cfgNav = document.querySelector('.nav-item[data-section="settings"]');
+  if (cfgNav) {
+    let badge = cfgNav.querySelector('.nav-badge-ig');
+    if (!linked) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'nav-badge nav-badge-ig';
+        badge.title = 'Conta Instagram não conectada';
+        badge.textContent = '!';
+        cfgNav.appendChild(badge);
+      }
+    } else {
+      badge?.remove();
+    }
+  }
+}
+
+function closeIgConnectModal() {
+  document.getElementById('ig-connect-overlay').classList.add('hidden');
+}
+
+function igShowStep(step) {
+  ['credentials', '2fa', 'success'].forEach(s => {
+    document.getElementById(`ig-step-${s === 'credentials' ? 'credentials' : s}`).classList.toggle(
+      'hidden',
+      s !== step
+    );
+  });
+  // mapeia os ids exatos usados no HTML
+  const map = { credentials: 'ig-step-credentials', '2fa': 'ig-step-2fa', success: 'ig-step-success' };
+  Object.entries(map).forEach(([k, id]) => {
+    document.getElementById(id)?.classList.toggle('hidden', k !== step);
+  });
+}
+
+/* ── Enviar credenciais Instagram ───────────────────────── */
+async function handleIgConnect() {
+  const username = document.getElementById('ig-username').value.trim();
+  const password = document.getElementById('ig-password').value;
+  const btn      = document.getElementById('ig-connect-btn');
+
+  setAuthError('ig-cred-error', '');
+  if (!username || !password) {
+    setAuthError('ig-cred-error', 'Preencha usuário e senha do Instagram.'); return;
+  }
+
+  setLoading(btn, true, '<i class="fa-solid fa-link"></i> Conectar');
+  try {
+    const data = await apiFetch('/api/instagram/connect', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (data.requires2FA) {
+      igShowStep('2fa');
+    } else {
+      auth.linkIg();
+      // Busca o user atualizado e sincroniza o status na UI
+      apiFetch('/api/auth/me').then(r => renderIgStatus(r.user)).catch(() => {});
+      igShowStep('success');
+    }
+  } catch (e) {
+    setAuthError('ig-cred-error', e.message || 'Falha ao conectar. Verifique suas credenciais.');
+  } finally {
+    setLoading(btn, false, '<i class="fa-solid fa-link"></i> Conectar');
+  }
+}
+
+/* ── Verificar código 2FA ───────────────────────────────── */
+async function handleIg2FA() {
+  const code = document.getElementById('ig-2fa-code').value.trim();
+  const btn  = document.getElementById('ig-2fa-submit');
+
+  setAuthError('ig-2fa-error', '');
+  if (code.length !== 6 || !/^\d+$/.test(code)) {
+    setAuthError('ig-2fa-error', 'Insira o código de 6 dígitos.'); return;
+  }
+
+  setLoading(btn, true, '<i class="fa-solid fa-check"></i> Verificar');
+  try {
+    const data = await apiFetch('/api/instagram/verify2fa', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+
+    if (data.requires2FA && data.pendingProfile === 'reply') {
+      // limpa o campo e mostra aviso para o segundo código
+      document.getElementById('ig-2fa-code').value = '';
+      document.getElementById('ig-2fa-code').focus();
+      setAuthError('ig-2fa-error', ''); // limpa erro anterior
+
+      // atualiza o texto informativo do modal para deixar claro que é o 2º perfil
+      const infoEl = document.querySelector('#ig-step-2fa .ig-info-text');
+      if (infoEl) {
+        infoEl.innerHTML = `
+          <strong>Sessão de resposta automática</strong><br>
+          O Instagram solicitou verificação para a segunda sessão (resposta automática).
+          Insira o novo código enviado para seu e-mail ou telefone.
+        `;
+      }
+      return; // permanece na tela de 2FA aguardando o segundo código
+    }
+
+    // tudo ok — ambos os perfis verificados
+    auth.linkIg();
+    apiFetch('/api/auth/me').then(r => renderIgStatus(r.user)).catch(() => {});
+    igShowStep('success');
+  } catch (e) {
+    setAuthError('ig-2fa-error', e.message || 'Código inválido ou expirado.');
+  } finally {
+    setLoading(btn, false, '<i class="fa-solid fa-check"></i> Verificar');
+  }
+}
+
+/* ── Reenviar código ────────────────────────────────────── */
+async function handleIgResend() {
+  const btn = document.getElementById('ig-resend-btn');
+  btn.disabled = true;
+  btn.textContent = 'Enviando…';
+  try {
+    await apiFetch('/api/instagram/resend2fa', { method: 'POST' });
+    showToast('info', 'Código reenviado.');
+    document.getElementById('ig-2fa-code').value = '';
+    document.getElementById('ig-2fa-code').focus();
+  } catch (e) {
+    showToast('error', 'Não foi possível reenviar: ' + e.message);
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = 'Reenviar código'; }, 30000);
+  }
+}
+
+/* ── Auto-avança ao digitar 6 dígitos ───────────────────── */
+function init2FAInput() {
+  document.getElementById('ig-2fa-code')?.addEventListener('input', e => {
+    e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+    if (e.target.value.length === 6) handleIg2FA();
+  });
+}
+
 /* ── Helpers ────────────────────────────────────────────── */
 function minutesToLabel(m) {
   if (m < 60) return `${m}min`;
@@ -73,10 +406,32 @@ function sentimentLabel(s) {
 
 async function apiFetch(path, opts = {}) {
   const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(auth.token ? { 'Authorization': 'Bearer ' + auth.token } : {}),
+    },
     ...opts,
   });
-  if (!res.ok) throw new Error(await res.text());
+
+  // Só desloga se o 401 vier de uma rota que NÃO seja do Instagram
+  if (res.status === 401 && !path.startsWith('/api/instagram/')) {
+    auth.clear();
+    showAuthScreen();
+    throw new Error('Sessão expirada.');
+  }
+
+  if (!res.ok) {
+    // Tenta parsear como JSON para pegar a mensagem legível
+    let msg;
+    try {
+      const json = await res.json();
+      msg = json.message || json.error || JSON.stringify(json);
+    } catch (_) {
+      msg = await res.text();
+    }
+    throw new Error(msg);
+  }
+
   return res.json();
 }
 
@@ -504,29 +859,25 @@ async function generateAiReply(comment) {
   try {
     const systemPrompt = document.getElementById('setting-system-prompt')?.value || '';
 
-    const res = await fetch(API + '/api/ai-reply', {
+    const data = await apiFetch('/api/ai-reply', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        commentId:    comment.id,
-        username:     comment.user,
-        text:         comment.text,
-        systemPrompt: systemPrompt || undefined,  // omite se vazio; server usa prompt.txt
+        commentId: comment.id,
+        username: comment.user,
+        text: comment.text,
+        systemPrompt: systemPrompt || undefined,
       }),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Erro desconhecido');
-    }
-
-    const data = await res.json();
     const aiText = data.reply;
     if (!aiText) throw new Error('Resposta vazia');
 
     ta.value = aiText;
     state.replyDraft = aiText;
-    document.getElementById('char-count').textContent = `${aiText.length}/300`;
+
+    const count = document.getElementById('char-count');
+    if (count) count.textContent = `${aiText.length}/300`;
+
     showToast('info', 'Resposta gerada. Revise antes de enviar.');
   } catch (e) {
     showToast('error', 'Não foi possível gerar resposta via IA: ' + e.message);
@@ -583,13 +934,23 @@ async function initAutomation() {
   master?.addEventListener('change', async () => {
     const on = master.checked;
     try {
-      await apiFetch('/api/bot/mode', {
+      const data = await apiFetch('/api/bot/mode', {
         method: 'POST',
         body: JSON.stringify({ autoReply: on }),
       });
-      state.automationEnabled = on;
-      syncAutomationUI(on);
-      showToast(on ? 'success' : 'info', on ? 'Automação global ativada.' : 'Automação global desativada.');
+      
+      state.automationEnabled = data.autoReply;
+      state.autoReply = data.autoReply;
+      state.botRunning = data.botRunning;
+      
+      syncAutomationUI(data.autoReply);
+      
+      showToast(
+        data.autoReply ? 'success' : 'info',
+        data.autoReply
+          ? 'Automação ativada. O bot começou a monitorar comentários.'
+          : 'Automação desativada. O bot foi parado.'
+      );
     } catch (e) {
       showToast('error', 'Erro ao alterar modo: ' + e.message);
       master.checked = !on;    // reverte visualmente
@@ -799,54 +1160,42 @@ function showToast(type, message) {
 }
 
 function startPolling() {
-  // Tenta SSE primeiro; cai em polling somente se o browser não suportar
-  if (!window.EventSource) {
-    _fallbackPolling();
-    return;
-  }
+  if (!auth.isLoggedIn()) return; // <-- não conecta sem token
 
-  var es = new EventSource('/api/events');
+  if (!window.EventSource) { _fallbackPolling(); return; }
+
+  var es = new EventSource('/api/events?token=' + encodeURIComponent(auth.token || ''));
   var reconnectTimer = null;
 
-  // ── tick: dashboard atualizado pelo watcher ──────────────────────────────
   es.addEventListener('tick', function(e) {
-    var payload = JSON.parse(e.data);        // { stats, hourlyReplies, newCount }
-
-    state.stats        = payload.stats;
+    var payload = JSON.parse(e.data);
+    state.stats = payload.stats;
     state.hourlyReplies = payload.hourlyReplies;
-
     updateBadge(payload.stats.pending ?? 0);
-
     if (state.activeSection === 'dashboard') {
       renderDashboardMetrics(payload.stats, [], null);
       renderActivityChart(payload.hourlyReplies);
     }
   });
 
-  // ── new_comments: chegaram comentários novos ─────────────────────────────
   es.addEventListener('new_comments', function(e) {
-    var payload = JSON.parse(e.data);        // { count, previews, stats }
-
+    var payload = JSON.parse(e.data);
     state.stats = payload.stats;
     updateBadge(payload.stats.pending ?? 0);
-
-    // Toast com preview do primeiro comentário
     var preview = payload.previews[0];
     var msg = payload.count === 1
       ? 'Novo comentário de @' + preview.user + ': "' + preview.text.slice(0, 50) + (preview.text.length > 50 ? '…' : '') + '"'
       : payload.count + ' novos comentários recebidos';
     showToast('info', msg);
-
-    // Recarrega a aba ativa sem precisar de round-trip extra
     if (state.activeSection === 'comments')  loadComments();
     if (state.activeSection === 'dashboard') loadDashboard();
   });
 
-  // ── onerror: reconecta com back-off ─────────────────────────────────────
   es.onerror = function() {
     es.close();
     clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(startPolling, 5000);   // tenta novamente em 5s
+    // Só reconecta se ainda estiver logado
+    if (auth.isLoggedIn()) reconnectTimer = setTimeout(startPolling, 5000);
   };
 }
 
@@ -873,7 +1222,65 @@ function _fallbackPolling() {
 }
 
 /* ── Init ────────────────────────────────────────────────── */
+function initAuth() {
+  /* Mostrar tela correta na carga */
+  if (auth.isLoggedIn()) {
+    showApp();
+  } else {
+    showAuthScreen();
+  }
+
+  initAuthTabs();
+  initPasswordToggles();
+  initAuthEnterKey();
+  init2FAInput();
+
+  /* Botões de auth */
+  document.getElementById('btn-login')?.addEventListener('click', handleLogin);
+  document.getElementById('btn-register')?.addEventListener('click', handleRegister);
+  document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
+
+  /* Modal Instagram */
+  // Botão fechar do modal IG
+  document.getElementById('ig-connect-close')?.addEventListener('click', () => {
+    const successStep = document.getElementById('ig-step-success');
+    const user = auth.user;
+    if (!successStep?.classList.contains('hidden') || user?.igLinked) {
+      closeIgConnectModal();
+    } else {
+      setAuthError('ig-cred-error', 'Conclua a conexão com o Instagram antes de continuar.');
+    }
+  });
+
+  // Botão "Ir para o Dashboard" no step de sucesso
+  document.getElementById('ig-done-btn')?.addEventListener('click', () => {
+    closeIgConnectModal();
+    switchSection('dashboard');
+  });
+
+  // Overlay — só fecha se já vinculado
+  document.getElementById('ig-connect-overlay')?.addEventListener('click', e => {
+    if (e.target !== document.getElementById('ig-connect-overlay')) return;
+    const user = auth.user;
+    if (user?.igLinked) closeIgConnectModal();
+  });
+
+  document.getElementById('ig-connect-btn')?.addEventListener('click', handleIgConnect);
+  document.getElementById('ig-2fa-submit')?.addEventListener('click', handleIg2FA);
+  document.getElementById('ig-2fa-back')?.addEventListener('click', () => igShowStep('credentials'));
+  document.getElementById('ig-resend-btn')?.addEventListener('click', handleIgResend);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+  initAuth();
+
+  // Sincroniza status do Instagram assim que a UI estiver pronta
+  if (auth.isLoggedIn()) {
+    apiFetch('/api/auth/me')
+      .then(r => renderIgStatus(r.user))
+      .catch(() => renderIgStatus(null));
+  }
+
   initNav();
   initFilters();
   initModal();
