@@ -116,8 +116,6 @@ async function login(profile = 'monitor') {
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-  console.log(`\n🔐 Login headless no Instagram [perfil: ${profile}]\n`);
-
   const username = await ask(rl, '👤 Usuário / e-mail / celular: ');
   const password = await ask(rl, '🔑 Senha: ');
 
@@ -126,7 +124,6 @@ async function login(profile = 'monitor') {
 
   try {
     // 1. Abrir página de login
-    console.log('\n⏳ Abrindo página de login...');
     await page.goto('https://www.instagram.com/accounts/login/', {
       waitUntil: 'domcontentloaded',
       timeout: 30_000,
@@ -140,7 +137,6 @@ async function login(profile = 'monitor') {
     }).then(h => h?.asElement()).catch(() => null);
 
     if (logInBtn) {
-      console.log('🔘 Botão "Log in" detectado, clicando...');
       await logInBtn.click();
       await sleep(1000);
     }
@@ -445,42 +441,31 @@ async function loginProfile({ userId, username, password, profile, sessionPath, 
   page.on('framenavigated',  frm => console.log  (`[${profile}] frame navigated: ${frm.url()}`));
 
   try {
-    console.log(`[${profile}] STEP 1 — goto login page`);
     await page.goto('https://www.instagram.com/accounts/login/', {
       waitUntil: 'domcontentloaded',
       timeout: 30_000,
     });
-    console.log(`[${profile}] STEP 1 OK — url: ${page.url()}`);
-
     await sleep(2000);
-
-    console.log(`[${profile}] STEP 2 — procura botão "Log in" inicial`);
     const logInBtn = await page.evaluateHandle(() => {
       const btns = [...document.querySelectorAll('button[type="button"]')];
       return btns.find(b => /^(log\s*in|entrar)$/i.test(b.innerText.trim())) ?? null;
     }).then(h => h?.asElement()).catch(() => null);
     if (logInBtn) { await logInBtn.click(); await sleep(1000); }
-    console.log(`[${profile}] STEP 2 OK — logInBtn: ${!!logInBtn}`);
 
-    console.log(`[${profile}] STEP 3 — waitForSelector username`);
+  
     await page.waitForSelector(SEL.username, { timeout: 30_000, visible: true });
-    console.log(`[${profile}] STEP 3 OK`);
 
     await sleep(300);
     await page.type(SEL.username, username, { delay: 55 });
 
-    console.log(`[${profile}] STEP 4 — waitForSelector password`);
     await page.waitForSelector(SEL.password, { timeout: 10_000 });
     console.log(`[${profile}] STEP 4 OK`);
 
     await page.type(SEL.password, password, { delay: 55 });
     await sleep(400);
 
-    console.log(`[${profile}] STEP 5 — waitForSelector loginBtn`);
     await page.waitForSelector(SEL.loginBtn, { timeout: 10_000 });
-    console.log(`[${profile}] STEP 5 OK`);
 
-    console.log(`[${profile}] STEP 6 — click loginBtn`);
     await page.click(SEL.loginBtn);
     console.log(`[${profile}] STEP 6 OK — aguardando outcome...`);
 
@@ -514,8 +499,6 @@ async function loginProfile({ userId, username, password, profile, sessionPath, 
       console.error(`[${profile}] race erro: ${err.message}`);
       return 'timeout';
     });
-
-    console.log(`[${profile}] STEP 7 — outcome: ${outcome} | url: ${page.url()}`);
 
     if (outcome === 'wrong_credentials') {
       await browser.close();

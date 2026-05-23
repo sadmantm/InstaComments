@@ -38,13 +38,16 @@ const auth = {
 
 /* ── Mostrar / ocultar as telas ─────────────────────────── */
 function showApp() {
-  document.getElementById('auth-screen').style.display  = 'none';
-  document.querySelector('.app-shell').style.display     = '';
+  document.getElementById('auth-screen').style.display = 'none';
+  const shell = document.querySelector('.app-shell');
+  shell.classList.remove('app-hidden');
+  shell.style.display = '';
 }
 
 function showAuthScreen() {
-  document.getElementById('auth-screen').style.display  = '';
-  document.querySelector('.app-shell').style.display     = 'none';
+  document.getElementById('auth-screen').style.display = '';
+  const shell = document.querySelector('.app-shell');
+  shell.classList.add('app-hidden');
 }
 
 /* ── Helpers UI ─────────────────────────────────────────── */
@@ -239,14 +242,11 @@ function closeIgConnectModal() {
 }
 
 function igShowStep(step) {
-  ['credentials', '2fa', 'success'].forEach(s => {
-    document.getElementById(`ig-step-${s === 'credentials' ? 'credentials' : s}`).classList.toggle(
-      'hidden',
-      s !== step
-    );
-  });
-  // mapeia os ids exatos usados no HTML
-  const map = { credentials: 'ig-step-credentials', '2fa': 'ig-step-2fa', success: 'ig-step-success' };
+  const map = {
+    credentials: 'ig-step-credentials',
+    '2fa':       'ig-step-2fa',
+    success:     'ig-step-success',
+  };
   Object.entries(map).forEach(([k, id]) => {
     document.getElementById(id)?.classList.toggle('hidden', k !== step);
   });
@@ -450,9 +450,10 @@ function switchSection(sec) {
   document.querySelectorAll('.nav-item').forEach(el =>
     el.classList.toggle('active', el.dataset.section === sec));
   document.querySelectorAll('.section').forEach(el =>
-    el.classList.toggle('hidden', !el.id.endsWith(sec)));
-  if (sec === 'comments') loadComments();
+    el.classList.toggle('hidden', el.id !== `section-${sec}`));
+  if (sec === 'comments')  loadComments();
   if (sec === 'dashboard') loadDashboard();
+  if (sec === 'automation') loadTemplates();   // ← adicionar esta linha
 }
 
 /* ── Dashboard ──────────────────────────────────────────── */
@@ -484,34 +485,40 @@ function renderDashboardMetrics(stats, recent, prev) {
   const total   = stats.total   ?? 0;
   const pending = stats.pending ?? 0;
   const replied = stats.replied ?? 0;
+  const newCount = pending;
 
   const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   setVal('m-total',   total);
-  setVal('m-new',     pending);
+  setVal('m-new',     newCount);
   setVal('m-pending', pending);
   setVal('m-manual',  replied);
   setVal('m-ai',      replied);
 
-  // ── Tendências ─────────────────────────────────────────────────────────
-  // Compara com snapshot anterior; na primeira carga prev é null → sem delta
-  function applyTrend(selector, current, previous) {
-    const el = document.querySelector(selector);
-    if (!el) return;
-    if (previous == null) { el.style.visibility = 'hidden'; return; }
-    const delta = current - previous;
-    const pct   = previous > 0 ? Math.round((delta / previous) * 100) : 0;
-    const up    = delta >= 0;
-    el.className = `metric-trend ${up ? 'up' : 'down'}`;
-    el.innerHTML = `<i class="fa-solid fa-arrow-trend-${up ? 'up' : 'down'}"></i> ${up ? '+' : ''}${pct}%`;
-    el.style.visibility = '';
-  }
+  // ── Tendências via data-metric ──────────────────────────────────────────
+  const metricValues = { total, new: newCount, pending, manual: replied, ai: replied };
+  const prevValues   = prev
+    ? { total: prev.total ?? 0, new: prev.pending ?? 0, pending: prev.pending ?? 0, manual: prev.replied ?? 0, ai: prev.replied ?? 0 }
+    : null;
 
-  applyTrend('.metric-card:nth-child(1) .metric-trend', total,   prev?.total);
-  applyTrend('.metric-card:nth-child(2) .metric-trend', pending, prev?.pending);
-  applyTrend('.metric-card:nth-child(3) .metric-trend', pending, prev?.pending);
-  applyTrend('.metric-card:nth-child(4) .metric-trend', replied, prev?.replied);
-  applyTrend('.metric-card:nth-child(5) .metric-trend', replied, prev?.replied);
+  document.querySelectorAll('.metric-card[data-metric]').forEach(card => {
+    const key     = card.dataset.metric;
+    const trendEl = card.querySelector('.metric-trend');
+    if (!trendEl) return;
 
+    if (!prevValues) { trendEl.style.visibility = 'hidden'; return; }
+
+    const current  = metricValues[key] ?? 0;
+    const previous = prevValues[key]   ?? 0;
+    const delta    = current - previous;
+    const pct      = previous > 0 ? Math.round((delta / previous) * 100) : 0;
+    const up       = delta >= 0;
+
+    trendEl.className = `metric-trend ${up ? 'up' : 'down'}`;
+    trendEl.innerHTML = `<i class="fa-solid fa-arrow-trend-${up ? 'up' : 'down'}"></i> ${up ? '+' : ''}${pct}%`;
+    trendEl.style.visibility = '';
+  });
+
+  // ── Posts recentes ─────────────────────────────────────────────────────
   const postList = document.getElementById('posts-list');
   if (!postList) return;
 
@@ -520,7 +527,6 @@ function renderDashboardMetrics(stats, recent, prev) {
     return;
   }
 
-  // agrupa por postShortcode preservando thumbnail e título
   const posts = {};
   recent.forEach(c => {
     const key = c.postShortcode || c.postUrl || 'desconhecido';
@@ -533,6 +539,7 @@ function renderDashboardMetrics(stats, recent, prev) {
   postList.innerHTML = Object.entries(posts)
     .sort((a, b) => b[1].count - a[1].count)
     .map(([shortcode, { count, thumb, title }]) => {
+      const safe = title.length > 40 ? title.slice(0, 40) + '…' : title;
       const thumbHtml = thumb
         ? `<img src="${avatarSrc(thumb, 'thumb-' + shortcode)}"
                 style="width:100%;height:100%;object-fit:cover;border-radius:6px"
@@ -542,7 +549,7 @@ function renderDashboardMetrics(stats, recent, prev) {
         <div class="post-row">
           <div class="post-thumb">${thumbHtml}</div>
           <div class="post-info">
-            <div class="post-name" title="${shortcode}">${title.slice(0, 40)}${title.length > 40 ? '…' : ''}</div>
+            <div class="post-name" title="${shortcode}">${safe}</div>
             <div class="post-meta">${count} comentário${count !== 1 ? 's' : ''}</div>
           </div>
           <div class="post-count">${count}</div>
@@ -555,25 +562,22 @@ function renderActivityChart(hourly) {
   const el = document.getElementById('activity-chart');
   if (!el) return;
 
-  // Se todos os valores forem zero, tenta construir distribuição
-  // a partir dos comentários em cache usando a hora de seenAt
   let data = hourly;
   const allZero = data.every(v => v === 0);
   if (allZero && state.comments.length) {
     data = new Array(24).fill(0);
     state.comments.forEach(c => {
-      if (c.timestamp) {
-        const h = new Date(c.timestamp).getHours();
-        data[h]++;
-      }
+      if (c.timestamp) data[new Date(c.timestamp).getHours()]++;
     });
   }
 
   const max = Math.max(...data, 1);
   el.innerHTML = data.map((v, h) => `
     <div class="bar-wrap">
-      <div class="bar" style="height:${Math.max(4, (v / max) * 100)}%" title="${v} comentário${v !== 1 ? 's' : ''}"></div>
-      <span class="bar-lbl">${String(h).padStart(2, '0')}h</span>
+      <div class="bar"
+           style="height:${Math.max(4, (v / max) * 100)}%"
+           title="${String(h).padStart(2,'0')}h — ${v} comentário${v !== 1 ? 's' : ''}">
+      </div>
     </div>`).join('');
 }
 
@@ -612,9 +616,10 @@ function getFilteredComments() {
 
 function renderComments() {
   const listEl = document.getElementById('comments-list');
+  if (!listEl) return;
   document.getElementById('comments-loading')?.remove();
 
-  const list = state.comments;           // todos, sem filtro local extra
+  const list = getFilteredComments();
   if (!list.length) {
     listEl.innerHTML = `<div class="loading-state"><i class="fa-regular fa-face-meh" style="font-size:28px;opacity:.3"></i><span>Nenhum comentário encontrado</span></div>`;
     return;
@@ -622,10 +627,12 @@ function renderComments() {
 
   listEl.innerHTML = list.map(c => {
     const status = c.replied ? 'replied-manual' : 'pending';
-    const age = timeSince(c.timestamp);
+    const age    = timeSince(c.timestamp);
     return `
-      <div class="comment-item ${c.id === state.selectedComment ? 'selected' : ''} ${!c.replied ? 'is-new' : ''}" data-id="${c.id}" data-shortcode="${c.postShortcode || ''}" data-user="${c.user}">
-        <img class="avatar" src="${avatarSrc(c.profilePic, c.id)}" alt="${c.user}" loading="lazy" onerror="this.src='https://i.pravatar.cc/80?u=${c.id}'" />
+      <div class="comment-item ${String(c.id) === String(state.selectedComment) ? 'selected' : ''} ${!c.replied ? 'is-new' : ''}"
+           data-id="${c.id}" data-shortcode="${c.postShortcode || ''}" data-user="${c.user}">
+        <img class="avatar" src="${avatarSrc(c.profilePic, c.id)}" alt="${c.user}"
+             loading="lazy" onerror="this.src='https://i.pravatar.cc/80?u=${c.id}'" />
         <div class="comment-item-body">
           <div class="comment-item-top">
             <span class="comment-username">@${c.user}</span>
@@ -634,7 +641,6 @@ function renderComments() {
           <div class="comment-text">${c.text}</div>
           <div class="comment-meta">
             <span class="status-tag ${statusClass(status)}">${statusLabel(status)}</span>
-            </span>
           </div>
         </div>
       </div>`;
@@ -824,9 +830,16 @@ function renderDetail(c) {
 }
 
 async function sendReply(id, isAi) {
-  const ta = document.getElementById('reply-textarea');
+  const ta  = document.getElementById('reply-textarea');
+  const btn = document.getElementById('btn-send-reply');
   const text = ta?.value.trim();
+
   if (!text) { showToast('error', 'Digite uma resposta antes de enviar.'); return; }
+  if (!btn) return;
+
+  const originalHTML = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Enviando…';
 
   try {
     await apiFetch(`/api/comments/${id}/reply`, {
@@ -834,7 +847,6 @@ async function sendReply(id, isAi) {
       body: JSON.stringify({ reply: text }),
     });
 
-    // atualiza cache local
     const c = state.comments.find(c => String(c.id) === String(id));
     if (c) { c.replied = true; c.reply = text; c.repliedAt = new Date().toISOString(); }
 
@@ -844,6 +856,8 @@ async function sendReply(id, isAi) {
     showToast('success', isAi ? 'Resposta da IA enviada.' : 'Resposta enviada com sucesso.');
   } catch (e) {
     showToast('error', 'Erro ao enviar resposta: ' + e.message);
+    btn.disabled = false;
+    btn.innerHTML = originalHTML;
   }
 }
 
@@ -889,6 +903,14 @@ async function generateAiReply(comment) {
 }
 
 /* ── Filtros ─────────────────────────────────────────────── */
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
 function initFilters() {
   document.querySelectorAll('.chip').forEach(chip => {
     chip.addEventListener('click', () => {
@@ -914,11 +936,14 @@ function initFilters() {
     loadComments();
   });
 
-  document.getElementById('search-input')?.addEventListener('input', e => {
-    state.searchQuery = e.target.value.toLowerCase().trim();
-    // Garante que a aba comentários esteja aberta ao digitar
+  const debouncedSearch = debounce(query => {
+    state.searchQuery = query;
     if (state.activeSection !== 'comments') switchSection('comments');
     else loadComments();
+  }, 350);
+  
+  document.getElementById('search-input')?.addEventListener('input', e => {
+    debouncedSearch(e.target.value.toLowerCase().trim());
   });
 }
 
@@ -981,81 +1006,113 @@ function syncAutomationUI(on) {
 }
 
 /* ── Templates / Respostas prontas (estado local) ─────────── */
-// O backend não tem endpoint de templates ainda; mantemos no cliente.
-const TEMPLATES_DEFAULT = [
-  { id: 1, name: 'Pergunta sobre Preço',       trigger: 'preço, valor, quanto custa, caro, barato',  text: 'Olá! Os preços estão disponíveis no nosso site. Acesse pelo link na bio 🛍️', active: true,  hits: 0, icon: 'fa-tag' },
-  { id: 2, name: 'Disponibilidade de Estoque', trigger: 'tem, disponível, estoque, tamanho, grade',  text: 'Oi! Para conferir disponibilidade e tamanhos, acesse nosso site 😊',          active: true,  hits: 0, icon: 'fa-box' },
-  { id: 3, name: 'Dúvidas sobre Envio',        trigger: 'frete, entrega, prazo, envio, correios',    text: 'Enviamos para todo o Brasil! Prazo e frete calculados na compra 🚚',          active: true,  hits: 0, icon: 'fa-truck' },
-  { id: 4, name: 'Agradecimento por Elogio',   trigger: 'amei, adorei, incrível, perfeito, lindo',   text: 'Que alegria! Obrigada pelo carinho ❤️',                                       active: true,  hits: 0, icon: 'fa-heart' },
-  { id: 5, name: 'Reclamação — DM',            trigger: 'errado, decepcionante, problema, ruim',     text: 'Sentimos muito 😔 Manda um Direct com os detalhes do pedido!',               active: false, hits: 0, icon: 'fa-triangle-exclamation' },
-  { id: 6, name: 'Formas de Pagamento',        trigger: 'parcelar, cartão, pix, boleto',             text: 'Aceitamos PIX, boleto e cartão em até 12x sem juros 🎉',                     active: true,  hits: 0, icon: 'fa-credit-card' },
-];
-
-let templates = [...TEMPLATES_DEFAULT];
+let templates = [];   // preenchido via API
 const ICONS_POOL = ['fa-bolt', 'fa-tag', 'fa-star', 'fa-message', 'fa-circle-check', 'fa-comment', 'fa-hand-wave'];
 
 function renderTemplates() {
   const list = document.getElementById('rules-list');
   if (!list) return;
+
   if (!templates.length) {
     list.innerHTML = `<div class="loading-state"><span>Nenhuma resposta pronta cadastrada</span></div>`;
     return;
   }
+
   list.innerHTML = templates.map(t => `
     <div class="rule-card" data-tpl="${t.id}">
-      <div class="rule-icon"><i class="fa-solid ${t.icon}"></i></div>
+      <div class="rule-icon"><i class="fa-solid ${t.icon || 'fa-bolt'}"></i></div>
       <div class="rule-body">
         <div class="rule-name">${t.name}</div>
         <div class="rule-trigger"><i class="fa-solid fa-key"></i> ${t.trigger}</div>
-        <div class="rule-preview">${t.text}</div>
+        <div class="rule-preview">${t.response}</div>
       </div>
       <div class="rule-actions">
-        <span class="rule-hit">${t.hits} uso${t.hits !== 1 ? 's' : ''}</span>
+        <span class="rule-hit">${t.hits ?? 0} uso${(t.hits ?? 0) !== 1 ? 's' : ''}</span>
         <label class="toggle-switch">
           <input type="checkbox" class="tpl-toggle" data-tpl-id="${t.id}" ${t.active ? 'checked' : ''} />
           <span class="toggle-slider"></span>
         </label>
-        <button class="icon-btn tpl-edit" data-tpl-id="${t.id}" title="Editar"><i class="fa-solid fa-pen"></i></button>
-        <button class="icon-btn tpl-del"  data-tpl-id="${t.id}" title="Remover"><i class="fa-solid fa-trash"></i></button>
+        <button class="icon-btn tpl-edit" data-tpl-id="${t.id}" title="Editar">
+          <i class="fa-solid fa-pen"></i>
+        </button>
+        <button class="icon-btn tpl-del" data-tpl-id="${t.id}" title="Remover">
+          <i class="fa-solid fa-trash"></i>
+        </button>
       </div>
     </div>`).join('');
 
   list.querySelectorAll('.tpl-toggle').forEach(tog => {
-    tog.addEventListener('change', e => {
-      const id = parseInt(e.target.dataset.tplId);
+    tog.addEventListener('change', async e => {
+      const id  = e.target.dataset.tplId;
       const tpl = templates.find(t => t.id === id);
-      tpl.active = e.target.checked;
-      showToast(tpl.active ? 'success' : 'info', `"${tpl.name}" ${tpl.active ? 'ativada' : 'desativada'}.`);
+      if (!tpl) return;
+      e.target.disabled = true;
+      try {
+        const updated = await apiFetch(`/api/templates/${id}/toggle`, { method: 'PATCH' });
+        tpl.active = updated.active;
+        showToast(tpl.active ? 'success' : 'info', `"${tpl.name}" ${tpl.active ? 'ativada' : 'desativada'}.`);
+      } catch (err) {
+        e.target.checked = !e.target.checked; // reverte visualmente
+        showToast('error', 'Erro ao alterar template: ' + err.message);
+      } finally {
+        e.target.disabled = false;
+      }
     });
   });
 
   list.querySelectorAll('.tpl-edit').forEach(btn => {
-    btn.addEventListener('click', () => openModal(parseInt(btn.dataset.tplId)));
+    btn.addEventListener('click', () => openModal(btn.dataset.tplId));
   });
 
   list.querySelectorAll('.tpl-del').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = parseInt(btn.dataset.tplId);
-      const tpl = templates.find(t => t.id === id);
-      templates = templates.filter(t => t.id !== id);
-      renderTemplates();
-      showToast('info', `"${tpl.name}" removida.`);
-    });
+    btn.addEventListener('click', () => confirmDeleteTemplate(btn.dataset.tplId));
   });
+}
+
+async function loadTemplates() {
+  const list = document.getElementById('rules-list');
+  if (list) list.innerHTML = `<div class="loading-state"><div class="spinner"></div><span>Carregando…</span></div>`;
+  try {
+    templates = await apiFetch('/api/templates');
+    renderTemplates();
+  } catch (e) {
+    showToast('error', 'Erro ao carregar templates: ' + e.message);
+    if (list) list.innerHTML = `<div class="loading-state"><span>Falha ao carregar templates.</span></div>`;
+  }
+}
+
+async function confirmDeleteTemplate(id) {
+  const tpl = templates.find(t => t.id === id);
+  if (!tpl) return;
+  if (!confirm(`Remover "${tpl.name}"? Esta ação não pode ser desfeita.`)) return;
+  try {
+    await apiFetch(`/api/templates/${id}`, { method: 'DELETE' });
+    templates = templates.filter(t => t.id !== id);
+    renderTemplates();
+    showToast('info', `"${tpl.name}" removida.`);
+  } catch (e) {
+    showToast('error', 'Erro ao remover template: ' + e.message);
+  }
 }
 
 /* ── Modal ───────────────────────────────────────────────── */
 let editingRuleId = null;
 
-function openModal(editId) {
+function openModal(editId = null) {
   editingRuleId = editId;
   const tpl = editId ? templates.find(t => t.id === editId) : null;
-  document.getElementById('modal-title').textContent = tpl ? 'Editar Resposta Pronta' : 'Nova Resposta Pronta';
-  document.getElementById('rule-name').value     = tpl?.name    ?? '';
-  document.getElementById('rule-trigger').value  = tpl?.trigger ?? '';
-  document.getElementById('rule-response').value = tpl?.text    ?? '';
-  document.getElementById('rule-active').checked = tpl ? tpl.active : true;
-  document.getElementById('modal-save').textContent = tpl ? 'Salvar Alterações' : 'Salvar Resposta';
+
+  document.getElementById('modal-title').textContent      = tpl ? 'Editar Resposta Pronta' : 'Nova Resposta Pronta';
+  document.getElementById('rule-name').value              = tpl?.name     ?? '';
+  document.getElementById('rule-trigger').value           = tpl?.trigger  ?? '';
+  document.getElementById('rule-response').value          = tpl?.response ?? '';
+  document.getElementById('rule-active').checked          = tpl ? tpl.active : true;
+  document.getElementById('modal-save').textContent       = tpl ? 'Salvar Alterações' : 'Salvar Resposta';
+
+  // Limpa erros visuais anteriores
+  ['rule-name', 'rule-trigger', 'rule-response'].forEach(id =>
+    document.getElementById(id)?.classList.remove('input-error'));
+
   document.getElementById('modal-overlay').classList.remove('hidden');
 }
 
@@ -1066,26 +1123,55 @@ function initModal() {
   document.getElementById('modal-cancel').addEventListener('click', close);
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
 
-  document.getElementById('modal-save').addEventListener('click', () => {
-    const name    = document.getElementById('rule-name').value.trim();
-    const trigger = document.getElementById('rule-trigger').value.trim();
-    const text    = document.getElementById('rule-response').value.trim();
-    const active  = document.getElementById('rule-active').checked;
-    if (!name || !trigger || !text) { showToast('error', 'Preencha todos os campos obrigatórios.'); return; }
-
-    if (editingRuleId) {
-      const tpl = templates.find(t => t.id === editingRuleId);
-      Object.assign(tpl, { name, trigger, text, active });
-      showToast('success', `"${name}" atualizada.`);
-    } else {
-      templates.unshift({
-        id: Date.now(), name, trigger, text, active, hits: 0,
-        icon: ICONS_POOL[Math.floor(Math.random() * ICONS_POOL.length)],
-      });
-      showToast('success', `"${name}" criada com sucesso.`);
+  document.getElementById('modal-save').addEventListener('click', async () => {
+    const nameEl    = document.getElementById('rule-name');
+    const triggerEl = document.getElementById('rule-trigger');
+    const textEl    = document.getElementById('rule-response');
+    const saveBtn   = document.getElementById('modal-save');
+  
+    const name     = nameEl.value.trim();
+    const trigger  = triggerEl.value.trim();
+    const response = textEl.value.trim();
+    const active   = document.getElementById('rule-active').checked;
+    const icon     = ICONS_POOL[Math.floor(Math.random() * ICONS_POOL.length)];
+  
+    // Validação visual inline
+    [nameEl, triggerEl, textEl].forEach(el => el.classList.remove('input-error'));
+    let hasError = false;
+    if (!name)     { nameEl.classList.add('input-error');    hasError = true; }
+    if (!trigger)  { triggerEl.classList.add('input-error'); hasError = true; }
+    if (!response) { textEl.classList.add('input-error');    hasError = true; }
+    if (hasError)  { showToast('error', 'Preencha todos os campos obrigatórios.'); return; }
+  
+    const originalLabel = saveBtn.textContent;
+    saveBtn.disabled    = true;
+    saveBtn.innerHTML   = '<i class="fa-solid fa-circle-notch fa-spin"></i> Salvando…';
+  
+    try {
+      if (editingRuleId) {
+        const updated = await apiFetch(`/api/templates/${editingRuleId}`, {
+          method: 'PUT',
+          body  : JSON.stringify({ name, trigger, response, active, icon }),
+        });
+        const idx = templates.findIndex(t => t.id === editingRuleId);
+        if (idx !== -1) templates[idx] = updated;
+        showToast('success', `"${name}" atualizada.`);
+      } else {
+        const created = await apiFetch('/api/templates', {
+          method: 'POST',
+          body  : JSON.stringify({ name, trigger, response, active, icon }),
+        });
+        templates.unshift(created);
+        showToast('success', `"${name}" criada com sucesso.`);
+      }
+      renderTemplates();
+      document.getElementById('modal-overlay').classList.add('hidden');
+    } catch (e) {
+      showToast('error', 'Erro ao salvar template: ' + e.message);
+    } finally {
+      saveBtn.disabled  = false;
+      saveBtn.textContent = originalLabel;
     }
-    renderTemplates();
-    close();
   });
 }
 
@@ -1139,6 +1225,19 @@ function initHeader() {
     const sb = document.getElementById('sidebar');
     sb.style.width = (sb.style.width === '0px') ? 'var(--sidebar-w)' : '0px';
   });
+
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      const si = document.getElementById('search-input');
+      if (si) { si.focus(); si.select(); }
+    }
+  });
+
+  document.getElementById('dash-period')?.addEventListener('change', e => {
+    state.dashPeriod = e.target.value;
+    loadDashboard();
+  });
 }
 
 /* ── Badge ───────────────────────────────────────────────── */
@@ -1159,16 +1258,19 @@ function showToast(type, message) {
   setTimeout(() => { t.classList.add('fade-out'); setTimeout(() => t.remove(), 350); }, 3000);
 }
 
+let _eventSource = null;
+
 function startPolling() {
-  if (!auth.isLoggedIn()) return; // <-- não conecta sem token
+  if (!auth.isLoggedIn()) return;
+  if (_eventSource && _eventSource.readyState !== EventSource.CLOSED) return; // já conectado
 
   if (!window.EventSource) { _fallbackPolling(); return; }
 
-  var es = new EventSource('/api/events?token=' + encodeURIComponent(auth.token || ''));
-  var reconnectTimer = null;
+  _eventSource = new EventSource('/api/events?token=' + encodeURIComponent(auth.token || ''));
+  let reconnectTimer = null;
 
-  es.addEventListener('tick', function(e) {
-    var payload = JSON.parse(e.data);
+  _eventSource.addEventListener('tick', e => {
+    const payload = JSON.parse(e.data);
     state.stats = payload.stats;
     state.hourlyReplies = payload.hourlyReplies;
     updateBadge(payload.stats.pending ?? 0);
@@ -1178,23 +1280,23 @@ function startPolling() {
     }
   });
 
-  es.addEventListener('new_comments', function(e) {
-    var payload = JSON.parse(e.data);
+  _eventSource.addEventListener('new_comments', e => {
+    const payload = JSON.parse(e.data);
     state.stats = payload.stats;
     updateBadge(payload.stats.pending ?? 0);
-    var preview = payload.previews[0];
-    var msg = payload.count === 1
-      ? 'Novo comentário de @' + preview.user + ': "' + preview.text.slice(0, 50) + (preview.text.length > 50 ? '…' : '') + '"'
-      : payload.count + ' novos comentários recebidos';
+    const preview = payload.previews[0];
+    const msg = payload.count === 1
+      ? `Novo comentário de @${preview.user}: "${preview.text.slice(0, 50)}${preview.text.length > 50 ? '…' : ''}"`
+      : `${payload.count} novos comentários recebidos`;
     showToast('info', msg);
     if (state.activeSection === 'comments')  loadComments();
     if (state.activeSection === 'dashboard') loadDashboard();
   });
 
-  es.onerror = function() {
-    es.close();
+  _eventSource.onerror = () => {
+    _eventSource.close();
+    _eventSource = null;
     clearTimeout(reconnectTimer);
-    // Só reconecta se ainda estiver logado
     if (auth.isLoggedIn()) reconnectTimer = setTimeout(startPolling, 5000);
   };
 }
@@ -1286,7 +1388,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initModal();
   initSettings();
   initHeader();
-  renderTemplates();
+  loadTemplates();
 
   await loadDashboard();
   await initAutomation();

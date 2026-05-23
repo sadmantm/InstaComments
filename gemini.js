@@ -9,18 +9,6 @@ const INPUT_SELS = [
   "textarea",
 ];
 
-const SEND_SELS = [
-  "button.send-button[aria-label='Enviar mensagem']",
-  "button.send-button",
-  "button[aria-label='Enviar mensagem']",
-  "button[aria-label='Enviar']",
-  "button[aria-label='Send message']",
-  "button[aria-label='Send']",
-  "button[data-test-id='send-button']",
-  "button:has(mat-icon[fonticon='send'])",
-  "button:has(mat-icon[data-mat-icon-name='send'])",
-];
-
 const RESPONSE_SELS = [
   "message-content p",
   "message-content .markdown",
@@ -37,8 +25,8 @@ const SCREENSHOT_DIR = path.join(__dirname, "debug_screenshots");
 
 const RETRY_CONFIG = {
   maxAttempts: 5,
-  delayMs: 3000,        // Espera base entre tentativas (ms)
-  backoffFactor: 1.5,   // Fator de backoff exponencial
+  delayMs: 3000,
+  backoffFactor: 1.5,
 };
 
 function saveScreenshot(page, name) {
@@ -49,79 +37,57 @@ function saveScreenshot(page, name) {
   } catch (_) {}
 }
 
-async function waitForSel(page, sels, timeout = 15000, label = "") {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    for (const sel of sels) {
-      try {
-        const el = await page.$(sel);
-        if (el) {
-          const visible = await page.evaluate((el) => {
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-          }, el);
-          if (visible) return { sel, el };
-        }
-      } catch (_) {}
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  throw new Error(
-    `Nenhum seletor encontrado`
-  );
-}
-
-async function detectResponseSel(page) {
-  return page.evaluate(() => {
-    const ZERO_STATE_TAGS = ["zero-state-block-picker", "assistant-messages-primary", "zero-state"];
-    const candidates = [
-      ...document.querySelectorAll("*"),
-    ].filter((el) => {
-      const tag = el.tagName.toLowerCase();
-      const cls = el.className || "";
-      const text = el.innerText?.trim() || "";
-      if (ZERO_STATE_TAGS.some(t => tag.includes(t) || el.closest(t))) return false;
-      return (
-        text.length > 20 &&
-        (tag.includes("response") ||
-          tag.includes("message") ||
-          tag.includes("model") ||
-          cls.includes("response") ||
-          cls.includes("model") ||
-          cls.includes("markdown"))
-      );
-    });
-
-    if (!candidates.length) return null;
-
-    const deepest = candidates.reduce((a, b) =>
-      a.querySelectorAll("*").length < b.querySelectorAll("*").length ? b : a
-    );
-
-    const tag = deepest.tagName.toLowerCase();
-    const cls = deepest.className?.split(" ").filter(Boolean)[0] || "";
-    return cls ? `${tag}.${cls}` : tag;
-  });
-}
-
-/**
- * Calcula o delay com backoff exponencial + jitter aleatório
- * para evitar thundering herd em múltiplas instâncias.
- */
 function calcDelay(attempt) {
   const exponential = RETRY_CONFIG.delayMs * Math.pow(RETRY_CONFIG.backoffFactor, attempt);
-  const jitter = Math.random() * 1000; // até 1s extra aleatório
+  const jitter = Math.random() * 1000;
   return Math.floor(exponential + jitter);
 }
 
-/**
- * Erros que NÃO devem ser retentados (falha definitiva).
- */
 function isFatalError(err) {
   return err.message?.includes("Gemini exige login");
 }
 
-async function askGeminiOnce(prompt) {
+/**
+ * Extrai o texto formatado do container de resposta (mesmo formato do modo normal).
+ */
+function extractText(container) {
+  const lines = [];
+  for (const el of container.children) {
+    const tag = el.tagName.toLowerCase();
+
+    // Ignora widgets internos: attachment-container (Google Search, follow-up, tabelas, etc.)
+    if (tag === "div" && el.classList.contains("attachment-container")) continue;
+    // Ignora elementos sem texto visível
+    const text = (el.innerText || "").trim();
+    if (!text) continue;
+
+    if (["h1","h2","h3","h4"].includes(tag)) {
+      lines.push(`\n${text}\n`);
+    } else if (["ul","ol"].includes(tag)) {
+      for (const li of el.querySelectorAll("li")) {
+        const t = (li.innerText || "").trim();
+        if (t) lines.push(`* ${t}`);
+      }
+    } else if (tag === "blockquote") {
+      lines.push(`> ${text}`);
+    } else if (tag === "table") {
+      // Tabelas: extrai cabeçalho e linhas separados por pipe
+      const rows = el.querySelectorAll("tr");
+      rows.forEach((row, i) => {
+        const cells = Array.from(row.querySelectorAll("th, td"))
+          .map((c) => (c.innerText || "").trim());
+        lines.push("| " + cells.join(" | ") + " |");
+        // Linha separadora após o cabeçalho
+        if (i === 0) lines.push("| " + cells.map(() => "---").join(" | ") + " |");
+      });
+    } else {
+      lines.push(text);
+    }
+  }
+  return lines.join("\n").trim();
+}
+
+async function askGeminiOnce(prompt, { stream = false, onChunk } = {}) {
   const browser = await puppeteer.launch({
     headless: "new",
     args: [
@@ -142,10 +108,11 @@ async function askGeminiOnce(prompt) {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
   );
 
+  // Bloqueia recursos desnecessários: imagens, mídia, fontes e CSS
   await page.setRequestInterception(true);
   page.on("request", (req) => {
     const type = req.resourceType();
-    if (["image", "media"].includes(type)) {
+    if (["image", "media", "font", "stylesheet"].includes(type)) {
       req.abort();
     } else {
       req.continue();
@@ -153,8 +120,10 @@ async function askGeminiOnce(prompt) {
   });
 
   try {
+    // domcontentloaded é muito mais rápido que networkidle2:
+    // avança assim que o HTML está parseado, sem esperar a rede ficar ociosa
     await page.goto("https://gemini.google.com/app", {
-      waitUntil: "networkidle2",
+      waitUntil: "domcontentloaded",
       timeout: 60000,
     });
 
@@ -169,19 +138,13 @@ async function askGeminiOnce(prompt) {
       );
     }
 
-    const { sel: inputSel } = await waitForSel(page, INPUT_SELS, 30000, "input");
-
-    await page.click(inputSel);
-    await new Promise((r) => setTimeout(r, 500));
-
-    await page.keyboard.down("Control");
-    await page.keyboard.press("KeyA");
-    await page.keyboard.up("Control");
-    await page.keyboard.press("Backspace");
-    await new Promise((r) => setTimeout(r, 300));
+    // waitForSelector usa MutationObserver internamente — reage instantaneamente
+    await page.waitForSelector(INPUT_SELS.join(", "), { timeout: 30000 });
+    const inputEl = await page.$(INPUT_SELS.join(", "));
+    if (!inputEl) throw new Error("Campo de input não encontrado");
 
     const inserted = await page.evaluate((text) => {
-      const editor = document.querySelector(".ql-editor");
+      const editor = document.querySelector(".ql-editor") || document.querySelector("[contenteditable='true']");
       if (!editor) return false;
       editor.focus();
       const range = document.createRange();
@@ -196,72 +159,118 @@ async function askGeminiOnce(prompt) {
       return true;
     }, prompt);
 
-    if (!inserted) throw new Error("Não foi possível inserir texto no editor Quill");
+    if (!inserted) throw new Error("Não foi possível inserir texto no editor");
 
+    // Aguarda o conteúdo aparecer no DOM antes de enviar (máx 3s)
     await page.waitForFunction(
       () => {
-        const btn =
-          document.querySelector("button.send-button[aria-label='Enviar mensagem']") ||
-          document.querySelector("button.send-button");
-        return btn && btn.getAttribute("aria-disabled") !== "true" && !btn.disabled;
+        const editor = document.querySelector(".ql-editor") || document.querySelector("[contenteditable='true']");
+        return editor && editor.innerText.trim().length > 2;
       },
-      { timeout: 10000 }
-    ).catch(() => console.log("[gemini] timeout aguardando botão — tentando mesmo assim"));
+      { timeout: 3000 }
+    ).catch(() => { throw new Error("Campo vazio após inserção — abortando envio"); });
 
-    await new Promise((r) => setTimeout(r, 400));
+    await page.keyboard.press("Enter");
 
-    const fieldContent = await page.evaluate(() => {
-      const editor = document.querySelector(".ql-editor");
-      return editor ? editor.innerText.trim() : "";
-    });
-    if (!fieldContent || fieldContent.length < 3) throw new Error("Campo vazio após inserção — abortando envio");
+    // Pequena pausa para o DOM iniciar a resposta antes de aguardar o botão de copiar
+    await new Promise((r) => setTimeout(r, 500));
 
-    try {
-      const { sel: sendSel } = await waitForSel(page, SEND_SELS, 5000, "send");
-      await page.click(sendSel);
-      console.log(`[gemini] mensagem enviada via botão`);
-    } catch (_) {
-      console.log("[gemini] botão não encontrado, usando Enter como fallback");
-      await page.keyboard.press("Enter");
-    }
-
-    await new Promise((r) => setTimeout(r, 2000));
-
-    let respSel;
-    try {
-      const result = await waitForSel(page, RESPONSE_SELS, 45000, "response");
-      respSel = result.sel;
-    } catch (e) {
-      console.log("[gemini] seletores fixos falharam, tentando detecção automática...");
-      await saveScreenshot(page, "fallback_detection");
-      respSel = await detectResponseSel(page);
-      if (!respSel) throw e;
-      console.log(`[gemini] seletor detectado dinamicamente: ${respSel}`);
-    }
+    // Aguarda o botão de copiar aparecer — sinal exato de que a geração terminou
+    console.log("[gemini] gerando resposta...");
 
     let lastText = "";
-    let stableCount = 0;
 
-    while (stableCount < 6) {
-      await new Promise((r) => setTimeout(r, 1000));
+    if (stream && typeof onChunk === "function") {
+      // Modo streaming: expõe função Node acessível pelo browser,
+      // instala MutationObserver que dispara onChunk a cada mutação no markdown
+      await page.exposeFunction("__geminiChunk__", onChunk);
 
-      const currentText = await page.evaluate((sel) => {
-        const els = document.querySelectorAll(sel);
-        const last = els[els.length - 1];
-        return last ? last.innerText.trim() : "";
-      }, respSel);
+      await page.evaluate(() => {
+        const getContainer = () => document.querySelector(".model-response-text .markdown");
 
-      if (currentText && currentText === lastText) {
-        stableCount++;
-      } else {
-        stableCount = 0;
-        lastText = currentText;
-      }
+        // Aguarda o container aparecer antes de observar
+        const poll = setInterval(() => {
+          const container = getContainer();
+          if (!container) return;
+          clearInterval(poll);
+
+          let lastSent = "";
+
+          const observer = new MutationObserver(() => {
+            const lines = [];
+            for (const el of container.children) {
+              const tag = el.tagName.toLowerCase();
+              const text = (el.innerText || "").trim();
+              if (!text) continue;
+              if (["h1","h2","h3","h4"].includes(tag)) {
+                lines.push(`\n${text}\n`);
+              } else if (["ul","ol"].includes(tag)) {
+                for (const li of el.querySelectorAll("li")) {
+                  const t = (li.innerText || "").trim();
+                  if (t) lines.push(`* ${t}`);
+                }
+              } else if (tag === "blockquote") {
+                lines.push(`> ${text}`);
+              } else {
+                lines.push(text);
+              }
+            }
+            const current = lines.join("\n").trim();
+            if (current && current !== lastSent) {
+              // Envia apenas o delta (novo conteúdo adicionado)
+              const delta = current.slice(lastSent.length);
+              if (delta) window.__geminiChunk__(delta);
+              lastSent = current;
+            }
+          });
+
+          observer.observe(container, { childList: true, subtree: true, characterData: true });
+        }, 100);
+      });
+
+      await page.waitForSelector('button[data-test-id="copy-button"]', { timeout: 120000 });
+      console.log("[gemini] geração concluída");
+
+      // Captura o texto final completo após streaming
+      lastText = await page.evaluate((fnSrc) => {
+        const extractText = new Function("container", fnSrc);
+        const container = document.querySelector(".model-response-text .markdown");
+        return container ? extractText(container) : "";
+      }, extractText.toString().replace(/^function extractText\(container\)\s*\{/, "").replace(/\}$/, ""));
+
+    } else {
+      // Modo normal: aguarda terminar e extrai tudo de uma vez
+      await page.waitForSelector('button[data-test-id="copy-button"]', { timeout: 120000 });
+      console.log("[gemini] geração concluída");
+
+      lastText = await page.evaluate(() => {
+        const container = document.querySelector(".model-response-text .markdown");
+        if (!container) return "";
+        const lines = [];
+        for (const el of container.children) {
+          const tag = el.tagName.toLowerCase();
+          const text = el.innerText.trim();
+          if (!text) continue;
+          if (["h1","h2","h3","h4"].includes(tag)) {
+            lines.push(`\n${text}\n`);
+          } else if (["ul","ol"].includes(tag)) {
+            for (const li of el.querySelectorAll("li")) {
+              const t = li.innerText.trim();
+              if (t) lines.push(`* ${t}`);
+            }
+          } else if (tag === "blockquote") {
+            lines.push(`> ${text}`);
+          } else {
+            lines.push(text);
+          }
+        }
+        return lines.join("\n").trim();
+      });
     }
 
     await browser.close();
 
-    if (!lastText) throw new Error("Resposta vazia após streaming");
+    if (!lastText) throw new Error("Resposta vazia após extração");
     return lastText;
   } catch (e) {
     await saveScreenshot(page, "error").catch(() => {});
@@ -270,13 +279,7 @@ async function askGeminiOnce(prompt) {
   }
 }
 
-/**
- * Wrapper com retry automático.
- * - Até RETRY_CONFIG.maxAttempts tentativas
- * - Backoff exponencial com jitter entre tentativas
- * - Erros fatais (ex: login) interrompem imediatamente
- */
-async function askGemini(prompt) {
+async function askGemini(prompt, options = {}) {
   let lastError;
 
   for (let attempt = 0; attempt < RETRY_CONFIG.maxAttempts; attempt++) {
@@ -291,7 +294,7 @@ async function askGemini(prompt) {
     }
 
     try {
-      const result = await askGeminiOnce(prompt);
+      const result = await askGeminiOnce(prompt, options);
       if (attempt > 0) {
         console.log(`[gemini] sucesso na tentativa ${attempt + 1}`);
       }
@@ -313,4 +316,17 @@ async function askGemini(prompt) {
   );
 }
 
-module.exports = { askGemini };
+module.exports = { askGemini, askGeminiOnce };
+
+// Modo normal (padrão)
+//askGemini("prompt").then(console.log).catch(console.error);
+
+// Modo streaming — recebe chunks em tempo real
+//askGemini(prompt, {
+ //stream: true,
+// onChunk: (delta) => process.stdout.write(delta),
+//})
+//  .then((full) => {
+//    console.log("\n\n[gemini] resposta completa recebida, total:", full.length, "chars");
+//  })
+//  .catch(console.error);

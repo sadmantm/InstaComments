@@ -2,3 +2,5 @@ node_modules
 session.json
 chrome-profile/
 cookies/
+users/
+db/

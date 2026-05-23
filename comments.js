@@ -16,13 +16,13 @@ function saveDB(db, commentsPath = DEFAULT_DB_PATH) {
   fs.writeFileSync(commentsPath, JSON.stringify(db, null, 2));
 }
 
-function markAsReplied(db, key, replyText, commentsPath = DEFAULT_DB_PATH) {
+function markAsReplied(db, key, replyText, commentsPath = DEFAULT_DB_PATH, meta = {}) {
   if (!db[key]) return;
-
-  db[key].replied = true;
+  db[key].replied   = true;
   db[key].repliedAt = new Date().toISOString();
   db[key].replyText = replyText;
-
+  // metadados opcionais (replySource, templateId, templateName, etc.)
+  Object.assign(db[key], meta);
   saveDB(db, commentsPath);
 }
 
@@ -44,7 +44,7 @@ function getPendingComments(db) {
   return Object.entries(db)
     .filter(([k]) => !k.startsWith('__'))
     .filter(([, v]) => !v.replied)
-    .map(([key, v]) => ({ key, ...v }));
+    .map(([key, v]) => ({ key, id: key, ...v }));  // id = alias de key
 }
 
 async function sleep(ms) {
@@ -127,7 +127,6 @@ async function openCommentsTab(page, maxRetries = 3) {
       });
 
       if (!notifClicked) throw new Error('Ícone de notificações não encontrado.');
-      console.log(`[tab] Ícone clicado via: ${notifClicked}`);
       await sleep(2000);
 
       // ── 2. Aguardar painel abrir ─────────────────────────────────────────
@@ -138,7 +137,6 @@ async function openCommentsTab(page, maxRetries = 3) {
         },
         { timeout: 10000 }
       );
-      console.log('[tab] Painel aberto.');
 
       // ── 3. Clicar na aba Comentários / Comments ──────────────────────────
       const tabClicked = await page.evaluate(() => {
@@ -149,7 +147,6 @@ async function openCommentsTab(page, maxRetries = 3) {
       });
 
       if (!tabClicked) throw new Error('Aba Comments não encontrada.');
-      console.log(`[tab] Aba "${tabClicked}" clicada.`);
       await sleep(2000);
 
       // ── 4. Confirmar que comentários carregaram ───────────────────────────
@@ -175,76 +172,196 @@ async function openCommentsTab(page, maxRetries = 3) {
   }
 }
 
+async function expandTruncatedComments(page) {
+  const expanded = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const containers = document.querySelectorAll('[data-pressable-container="true"]');
+    let count = 0;
+
+    for (const container of containers) {
+      // O botão "more" fica DENTRO do span principal, com role="button"
+      // e o texto " more" ou " mais"
+      const buttons = container.querySelectorAll('div[role="button"]');
+      for (const btn of buttons) {
+        const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+        if (txt === 'more' || txt === 'mais') {
+          btn.click();
+          count++;
+          await sleep(50); // pequeno respiro entre cliques
+          break; // só um "more" por container
+        }
+      }
+    }
+    return count;
+  });
+
+  if (expanded > 0) {
+    // Espera o DOM reagir aos cliques
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return expanded;
+}
+
 async function scrapeVisibleComments(page) {
-  console.log('[scrape] Extraindo comentários visíveis...');
+  await expandTruncatedComments(page);
 
   const results = await page.evaluate(() => {
+    // ---------- helpers ----------
     function fakeId(username, postShortcode, text) {
-      const raw = `${username}::${postShortcode}::${text}`;
-      return 'fake_' + raw.split('').reduce((a, c) => Math.imul(31, a) + c.charCodeAt(0) | 0, 0).toString(36);
+      // Normaliza o texto para reduzir variações entre scrapes
+      const normalized = text.trim().toLowerCase().replace(/\s+/g, ' ');
+      const raw  = `${username}::${postShortcode}::${normalized}`;
+      const hash = raw
+        .split('')
+        .reduce((a, c) => (Math.imul(31, a) + c.charCodeAt(0)) | 0, 0);
+      return 'fake_' + Math.abs(hash).toString(36);
     }
 
-    function extractCommentText(container) {
-      // O span principal contém "username commented: texto" ou "username comentou: texto"
-      // Queremos apenas o texto após o ": "
-      const mainSpan = container.querySelector('span[dir="auto"]');
-      if (!mainSpan) return '';
+    /**
+     * Mapeia textos de data em PT/EN para um ISO aproximado.
+     * O Instagram exibe coisas como:
+     *   "May 15", "15 de mai.", "2h", "3 d", "1 sem.", "1w", "yesterday", "ontem"
+     * Não temos o ano nem hora exatos, então retornamos:
+     *   { raw: 'May 15', iso: '2026-05-15' } quando der pra inferir uma data,
+     *   { raw: '2h', iso: null }            quando for relativo curto (deixamos pro caller resolver com seenAt).
+     */
+    function parseTimeLabel(raw) {
+      if (!raw) return { raw: '', iso: null };
+      const txt = raw.trim();
 
-      // Clona o span para manipular sem alterar o DOM
+      // Relativo curto: 2h, 3d, 1w, 5m, 1s (segundos), 1 sem., 2 sem
+      const relMatch = txt.match(/^(\d+)\s*(s|m|h|d|w|sem\.?)$/i);
+      if (relMatch) return { raw: txt, iso: null };
+
+      // "yesterday" / "ontem"
+      if (/^(yesterday|ontem)$/i.test(txt)) {
+        const d = new Date();
+        d.setDate(d.getDate() - 1);
+        return { raw: txt, iso: d.toISOString().slice(0, 10) };
+      }
+
+      // "May 15", "Jan 3", etc.
+      const monthsEN = {
+        jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+        jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+      };
+      const monthsPT = {
+        jan: 0, fev: 1, mar: 2, abr: 3, mai: 4, jun: 5,
+        jul: 6, ago: 7, set: 8, out: 9, nov: 10, dez: 11,
+      };
+
+      const enMatch = txt.match(/^([A-Za-z]{3,})\s+(\d{1,2})$/);
+      if (enMatch) {
+        const key = enMatch[1].slice(0, 3).toLowerCase();
+        const day = parseInt(enMatch[2], 10);
+        const m = monthsEN[key] ?? monthsPT[key];
+        if (m != null) {
+          const year = new Date().getFullYear();
+          const d = new Date(Date.UTC(year, m, day));
+          // se a data caiu no futuro, assume ano anterior
+          if (d > new Date()) d.setUTCFullYear(year - 1);
+          return { raw: txt, iso: d.toISOString().slice(0, 10) };
+        }
+      }
+
+      // "15 de mai." / "15 de mai"
+      const ptMatch = txt.match(/^(\d{1,2})\s*de\s*([a-zç]{3,})\.?$/i);
+      if (ptMatch) {
+        const day = parseInt(ptMatch[1], 10);
+        const key = ptMatch[2].slice(0, 3).toLowerCase();
+        const m = monthsPT[key];
+        if (m != null) {
+          const year = new Date().getFullYear();
+          const d = new Date(Date.UTC(year, m, day));
+          if (d > new Date()) d.setUTCFullYear(year - 1);
+          return { raw: txt, iso: d.toISOString().slice(0, 10) };
+        }
+      }
+
+      return { raw: txt, iso: null };
+    }
+
+    /**
+     * Extrai o texto do comentário e a data a partir do span principal.
+     * Estrutura observada:
+     *   <span dir="auto">
+     *     <a href="/user/"><div>...<span class="_ap3a">user</span>...</div></a>
+     *     " commented: TEXTO DO COMENTÁRIO "
+     *     <div role="button">more</div>   (opcional)
+     *     <span>May 15</span>             (data, sempre o último span direto)
+     *   </span>
+     */
+    function extractTextAndDate(container) {
+      const mainSpan = container.querySelector('div.x1iyjqo2 > span[dir="auto"]');
+      if (!mainSpan) return { text: '', dateLabel: '' };
+
+      // 1) Data: último <span> filho DIRETO do mainSpan (não dentro do <a>)
+      let dateLabel = '';
+      const directSpans = Array.from(mainSpan.children).filter(
+        (el) => el.tagName === 'SPAN'
+      );
+      if (directSpans.length > 0) {
+        dateLabel = (directSpans[directSpans.length - 1].innerText || '').trim();
+      }
+
+      // 2) Texto: clona o span e remove o que não é o conteúdo
       const clone = mainSpan.cloneNode(true);
 
-      // Remove elementos de tempo (abbr/span com hora)
-      clone.querySelectorAll('abbr, time').forEach(el => el.remove());
+      // remove o link do username (e tudo dentro)
+      clone.querySelectorAll('a').forEach((a) => {
+        // só remove se for o link de perfil (não tem aria-label de mídia)
+        if (!a.getAttribute('aria-label')) a.remove();
+      });
+      // remove botão "more"
+      clone.querySelectorAll('div[role="button"]').forEach((el) => el.remove());
+      // remove o último span (que é a data)
+      const cloneSpans = Array.from(clone.children).filter(
+        (el) => el.tagName === 'SPAN'
+      );
+      if (cloneSpans.length > 0) cloneSpans[cloneSpans.length - 1].remove();
 
-      // Remove o botão "more" / "mais"
-      clone.querySelectorAll('[role="button"]').forEach(el => el.remove());
+      let text = clone.innerText || clone.textContent || '';
 
-      let raw = clone.innerText || clone.textContent || '';
+      // remove "commented:" / "comentou:" no início
+      text = text.replace(/^\s*(?:commented|comentou)\s*:\s*/i, '');
+      // remove menção @username inicial, se houver
+      text = text.replace(/^@\S+\s*/, '');
+      // colapsa espaços/quebras
+      text = text.replace(/\s+/g, ' ').trim();
 
-      // Remove prefixo "username commented:" ou "username comentou:"
-      raw = raw.replace(/^.*?(?:commented|comentou)\s*:\s*/i, '');
-
-      // Remove menção inicial @username se existir
-      raw = raw.replace(/^@\S+\s*/, '');
-
-      // Remove timestamp no final (ex: "4h", "1d", "14 hours ago")
-      raw = raw.replace(/\s*\d+[hdsm]\s*$/, '').replace(/\s*\d+\s+\w+\s+ago\s*$/i, '');
-
-      return raw.trim();
+      return { text, dateLabel };
     }
 
-    const results = [];
+    // ---------- main loop ----------
+    const out = [];
     const containers = document.querySelectorAll('[data-pressable-container="true"]');
 
     for (const container of containers) {
       try {
-        // Username: span com classe _ap3a
+        // Username via span dedicado
         const usernameEl = container.querySelector('span._ap3a._aaco._aacw._aacx._aad7._aade');
         if (!usernameEl) continue;
-        const username = usernameEl.innerText.trim();
+        const username = (usernameEl.innerText || '').trim();
         if (!username) continue;
 
-        // Link da mídia: aria-label="Media thumbnail" ou "Miniatura de mídia"
+        // Link da mídia (post)
         const mediaLink =
           container.querySelector('a[aria-label="Media thumbnail"]') ||
           container.querySelector('a[aria-label="Miniatura de mídia"]');
         if (!mediaLink) continue;
 
         const postHref = mediaLink.getAttribute('href') || '';
-        const postMatch = postHref.match(/\/p\/([^/]+)\//);
+        const postMatch = postHref.match(/\/(?:p|reel)\/([^/]+)\//);
         if (!postMatch) continue;
 
         const postShortcode = postMatch[1];
         const postUrl = `https://www.instagram.com${postHref}`;
+        const thumbnailUrl = mediaLink.querySelector('img')?.src || '';
 
-        // Thumbnail
-        const thumbImg = mediaLink.querySelector('img');
-        const thumbnailUrl = thumbImg?.src || '';
-
-        // Comment ID via link /c/
-        const commentLink = container.querySelector('a[href*="/c/"]');
+        // Comment ID (link /c/) — quando o IG renderiza
         let commentId = '';
         let commentDatetime = '';
+        const commentLink = container.querySelector('a[href*="/c/"]');
         if (commentLink) {
           const href = commentLink.getAttribute('href') || '';
           const cMatch = href.match(/\/c\/([^/]+)\//);
@@ -253,155 +370,54 @@ async function scrapeVisibleComments(page) {
           if (timeEl) commentDatetime = timeEl.getAttribute('datetime') || '';
         }
 
-        // Tempo via abbr (fallback)
-        const abbrEl = container.querySelector('abbr[aria-label]');
-        const timeLabel = abbrEl?.getAttribute('aria-label') || '';
+        // Texto + data exibida ao lado
+        const { text, dateLabel } = extractTextAndDate(container);
+        const parsed = parseTimeLabel(dateLabel);
 
-        // Texto do comentário
-        // Texto do comentário
-const text = extractCommentText(container);
+        if (!commentId) commentId = fakeId(username, postShortcode, text);
 
-if (!commentId) commentId = fakeId(username, postShortcode, text);
-
-// Foto de perfil
-const profileImg = [...container.querySelectorAll('img')].find(img => {
-  const alt = (img.getAttribute('alt') || '').toLowerCase();
-  const src = img.getAttribute('src') || '';
-
-  const isProfilePic =
-    alt.includes('foto do perfil') ||
-    alt.includes('profile picture');
-
-  const isMediaThumb =
-    alt.includes('miniatura de mídia') ||
-    alt.includes('media thumbnail');
-
-  const looksLikeProfileUrl =
-    src.includes('/t51.82787-19/') ||
-    src.includes('profile_pic') ||
-    src.includes('s150x150');
-
-  return isProfilePic && !isMediaThumb && looksLikeProfileUrl;
-});
-
-const profilePic = profileImg?.src || '';
-
-if (username && postShortcode) {
-  results.push({
-    username,
-    text,
-    postShortcode,
-    postUrl,
-    thumbnailUrl,
-    postTitle: '',
-    commentId,
-    datetime: commentDatetime,
-    timeLabel,
-    profilePic,
-  });
-}
-
-        if (username && postShortcode) {
-          results.push({
-            username,
-            text,
-            postShortcode,
-            postUrl,
-            thumbnailUrl,
-            postTitle: '',
-            commentId,
-            datetime: commentDatetime,
-            timeLabel,
-            profilePic,
+        // Foto de perfil: pega via alt estável ("X's profile picture" / "Foto do perfil de X")
+        let profilePic = '';
+        const avatarLink = container.querySelector(`a[href="/${username}/"] img`);
+        if (avatarLink) {
+          profilePic = avatarLink.getAttribute('src') || '';
+        } else {
+          const profileImg = Array.from(container.querySelectorAll('img')).find((img) => {
+            const alt = (img.getAttribute('alt') || '').toLowerCase();
+            return (
+              alt.includes(`${username.toLowerCase()}'s profile picture`) ||
+              alt.includes(`foto do perfil de ${username.toLowerCase()}`)
+            );
           });
+          profilePic = profileImg?.src || '';
         }
+
+        out.push({
+          username,
+          text,
+          postShortcode,
+          postUrl,
+          thumbnailUrl,
+          postTitle: '',
+          commentId,
+          // datetime preciso (quando o IG fornece via <time>) ou ISO parseado do label
+          datetime: commentDatetime || parsed.iso || '',
+          // como veio na tela: "May 15", "2h", "1 sem.", etc.
+          timeLabel: parsed.raw,
+          // flag: true se for relativo ("2h") e não conseguimos virar data absoluta
+          timeIsRelative: !commentDatetime && !parsed.iso && !!parsed.raw,
+          profilePic,
+        });
       } catch (e) {
         console.warn('[scrape] Erro ao processar container:', e.message);
       }
     }
 
-    return results;
+    return out;
   });
 
   console.log(`[scrape] ${results.length} comentário(s) extraído(s).`);
   return results;
-}
-
-async function scrollPanel(page, maxScrolls = 10) {
-  console.log(`[scroll] Localizando painel de notificações...`);
-
-  // Estratégia: identifica o painel UMA vez pelo seu conteúdo estrutural.
-  // O painel é o menor ancestral scrollável que contém TODOS os
-  // [data-pressable-container] — não apenas um filho qualquer.
-  // Guardamos um "fingerprint" (scrollHeight inicial) para detectar
-  // se o DOM foi substituído e re-localizar se necessário.
-  const findPanel = () => page.evaluate(() => {
-    // Pega o primeiro pressable como âncora
-    const anchor = document.querySelector('[data-pressable-container="true"]');
-    if (!anchor) return null;
-
-    // Sobe na árvore a partir do anchor até achar o scrollável
-    let node = anchor.parentElement;
-    while (node && node !== document.documentElement) {
-      const s = window.getComputedStyle(node);
-      if (
-        (s.overflowY === 'scroll' || s.overflowY === 'auto') &&
-        node.scrollHeight > node.clientHeight
-      ) {
-        const r = node.getBoundingClientRect();
-        return {
-          scrollTop  : node.scrollTop,
-          scrollHeight: node.scrollHeight,
-          centerX    : r.left + r.width  / 2,
-          centerY    : r.top  + r.height / 2,
-        };
-      }
-      node = node.parentElement;
-    }
-    return null;
-  });
-
-  // Scroll: volta ao nó via mesma lógica de âncora e incrementa scrollTop
-  const doScroll = (amount) => page.evaluate((amount) => {
-    const anchor = document.querySelector('[data-pressable-container="true"]');
-    if (!anchor) return { scrolled: false, reason: 'sem anchor' };
-    let node = anchor.parentElement;
-    while (node && node !== document.documentElement) {
-      const s = window.getComputedStyle(node);
-      if (
-        (s.overflowY === 'scroll' || s.overflowY === 'auto') &&
-        node.scrollHeight > node.clientHeight
-      ) {
-        const before = node.scrollTop;
-        node.scrollTop += amount;
-        return { scrolled: node.scrollTop !== before, reason: 'ok' };
-      }
-      node = node.parentElement;
-    }
-    return { scrolled: false, reason: 'scrollável não encontrado' };
-  }, amount);
-
-  const info = await findPanel();
-  if (!info) {
-    console.warn('[scroll] Painel não encontrado, abortando.');
-    return;
-  }
-
-  console.log(`[scroll] Painel localizado. Iniciando scroll (máx ${maxScrolls} vezes)...`);
-
-  // Posiciona o mouse sobre o painel para ativar o hover
-  await page.mouse.move(info.centerX, info.centerY);
-  await sleep(150);
-
-  for (let i = 0; i < maxScrolls; i++) {
-    const { scrolled, reason } = await doScroll(600);
-    if (!scrolled) {
-      console.log(`[scroll] Fim do painel no scroll ${i + 1} (${reason}).`);
-      break;
-    }
-    console.log(`[scroll] Scroll ${i + 1} OK.`);
-    await sleep(1500);
-  }
 }
 
 // ─── Helper JS injetado na página do post ────────────────────────────────────
@@ -532,14 +548,6 @@ async function replyToComment(
   const isFakeId = commentId.startsWith('fake_');
   const postUrl = comment.postUrl || `https://www.instagram.com/p/${postShortcode}/`;
 
-  console.log(`\n[reply] Iniciando resposta para @${username}`);
-  console.log(`[reply] Post: ${postUrl}`);
-  console.log(`[reply] commentId: ${commentId} | isFakeId: ${isFakeId}`);
-  console.log(`[reply] Texto do comentário: "${commentText}"`);
-  console.log(`[reply] Resposta a postar: "${replyText.slice(0, 80)}"`);
-
-  console.log('[reply] Abrindo sessão dedicada [reply]...');
-
   const session = await getSessionPage('reply', {
     sessionPath,
     userDataDir,
@@ -561,18 +569,14 @@ async function replyToComment(
       }
 
       try {
-        console.log(`[reply] Navegando para ${postUrl}...`);
         await page.goto(postUrl, { waitUntil: 'networkidle2', timeout: 30000 });
         await sleep(2000);
 
         const currentUrl = page.url();
-        console.log(`[reply] URL atual: ${currentUrl}`);
 
         if (currentUrl.includes('accounts.google.com') || currentUrl.includes('/accounts/login')) {
           throw new Error('Redirecionado para login — sessão reply expirada.');
         }
-
-        console.log('[reply] Procurando container do comentário...');
 
         const clickResult = await page.evaluate(
           (target, doLike, src) => {
@@ -592,15 +596,11 @@ async function replyToComment(
           helperSrc
         );
 
-        console.log(`[reply] Resultado do clique: clicked=${clickResult.clicked} | reason=${clickResult.reason}`);
-
         if (!clickResult.clicked) {
           throw new Error(`Botão "Responder" não encontrado para @${username}: ${clickResult.reason}`);
         }
 
         await sleep(1500);
-
-console.log('[reply] Aguardando textarea...');
 
 const textarea = await page.waitForSelector(
   'textarea[placeholder="Adicione um comentário..."]',
@@ -636,16 +636,11 @@ const existingText = await page.evaluate(() => {
   return ta ? ta.value : '';
 });
 
-console.log(`[reply] Conteúdo já na textarea: "${existingText.trim()}"`);
-
 // Se já tem o @mention, só adiciona o texto depois
 // Se não tem nada (fallback), digita normalmente
 const prefix = existingText.endsWith(' ') ? '' : ' ';
 await textarea.type(prefix + replyText, { delay: 40 });
 await sleep(500);
-
-console.log('[reply] Clicando em "Postar"...');
-
 
         const posted = await page.evaluate(() => {
           const btn = [...document.querySelectorAll('[role="button"]')]
@@ -702,7 +697,6 @@ async function fetchComments({
     });
 
     await openCommentsTab(page);
-    await scrollPanel(page, scrolls);
 
     const scraped = await scrapeVisibleComments(page);
 
@@ -786,7 +780,6 @@ async function watchComments({
 
       await sleep(3000);
       await openCommentsTab(page);
-      await scrollPanel(page, scrolls);
 
       const scraped = await scrapeVisibleComments(page);
       const db      = loadDB(commentsPath);
@@ -866,7 +859,6 @@ async function watchComments({
     },
   };
 }
-
 
 async function replyAllPending(replyFn, delayMs = 8000) {
   const db = loadDB(commentsPath);

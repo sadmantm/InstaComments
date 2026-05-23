@@ -167,7 +167,7 @@
     </div>
   </div>  
 
-  <div class="app-shell" style="display:none">
+  <div class="app-shell app-hidden">
 
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
@@ -247,39 +247,44 @@
           </div>
 
           <div class="metrics-grid">
-            <div class="metric-card">
+            <div class="metric-card" data-metric="total">
               <div class="metric-icon blue"><i class="fa-solid fa-comments"></i></div>
               <div class="metric-body">
                 <span class="metric-value" id="m-total">248</span>
                 <span class="metric-label">Total de Comentários</span>
+                <span class="metric-trend" style="visibility:hidden"></span>
               </div>
             </div>
-            <div class="metric-card highlight-new">
+            <div class="metric-card highlight-new" data-metric="new">
               <div class="metric-icon purple"><i class="fa-solid fa-user-plus"></i></div>
               <div class="metric-body">
                 <span class="metric-value" id="m-new">37</span>
                 <span class="metric-label">Novos</span>
+                <span class="metric-trend" style="visibility:hidden"></span>
               </div>
             </div>
-            <div class="metric-card">
+            <div class="metric-card" data-metric="pending">
               <div class="metric-icon amber"><i class="fa-solid fa-clock"></i></div>
               <div class="metric-body">
                 <span class="metric-value" id="m-pending">41</span>
                 <span class="metric-label">Pendentes</span>
+                <span class="metric-trend" style="visibility:hidden"></span>
               </div>
             </div>
-            <div class="metric-card">
+            <div class="metric-card" data-metric="manual">
               <div class="metric-icon green"><i class="fa-solid fa-user-pen"></i></div>
               <div class="metric-body">
                 <span class="metric-value" id="m-manual">89</span>
                 <span class="metric-label">Respondidos Manualmente</span>
+                <span class="metric-trend" style="visibility:hidden"></span>
               </div>
             </div>
-            <div class="metric-card">
+            <div class="metric-card" data-metric="ai">
               <div class="metric-icon cyan"><i class="fa-solid fa-robot"></i></div>
               <div class="metric-body">
                 <span class="metric-value" id="m-ai">81</span>
                 <span class="metric-label">Respondidos por IA</span>
+                <span class="metric-trend" style="visibility:hidden"></span>
               </div>
             </div>
           </div>

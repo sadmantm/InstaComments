@@ -60,7 +60,20 @@ sqliteDb.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT
   );
-  CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id);
+  CREATE TABLE IF NOT EXISTS templates (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    trigger    TEXT NOT NULL,
+    response   TEXT NOT NULL,
+    active     INTEGER DEFAULT 1,
+    hits       INTEGER DEFAULT 0,
+    icon       TEXT DEFAULT 'fa-bolt',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_tokens_user    ON tokens(user_id);
+  CREATE INDEX IF NOT EXISTS idx_templates_user ON templates(user_id);
 `);
 
 setInterval(() => {
@@ -173,9 +186,15 @@ function register(name, email, password) {
     throw Object.assign(new Error('Dados inválidos.'), { status: 400 });
   if (sqliteDb.prepare('SELECT id FROM users WHERE email = ?').get(email))
     throw Object.assign(new Error('E-mail já cadastrado.'), { status: 409 });
+
   const id             = crypto.randomUUID();
   const { hash, salt } = hashPassword(password);
-  sqliteDb.prepare('INSERT INTO users (id,name,email,hash,salt) VALUES (?,?,?,?,?)').run(id, name, email, hash, salt);
+  sqliteDb
+    .prepare('INSERT INTO users (id,name,email,hash,salt) VALUES (?,?,?,?,?)')
+    .run(id, name, email, hash, salt);
+
+  seedUserTemplates(id); // ← templates padrão
+
   return { token: createToken(id), user: { id, name, email, igLinked: false } };
 }
 
@@ -239,6 +258,122 @@ function patchUserCfg(userId, patch) {
   const next = { ...cfg, ...patch };
   saveUserCfg(userId, next);
   return next;
+}
+
+// #endregion
+
+// #region Templates
+
+const TEMPLATES_DEFAULT_DATA = [
+  {
+    name    : 'Pergunta sobre Preço',
+    trigger : 'preço, valor, quanto custa, caro, barato',
+    response: 'Olá! Os preços estão disponíveis no nosso site. Acesse pelo link na bio 🛍️',
+    icon    : 'fa-tag',
+  },
+  {
+    name    : 'Dúvidas sobre Envio',
+    trigger : 'frete, entrega, prazo, envio, correios',
+    response: 'Enviamos para todo o Brasil! Prazo e frete são calculados na finalização da compra 🚚',
+    icon    : 'fa-truck',
+  },
+];
+
+function seedUserTemplates(userId) {
+  const existing = sqliteDb
+    .prepare('SELECT COUNT(*) as c FROM templates WHERE user_id = ?')
+    .get(userId);
+  if (existing.c > 0) return; // já tem templates, não duplica
+
+  const insert = sqliteDb.prepare(`
+    INSERT INTO templates (id, user_id, name, trigger, response, active, hits, icon)
+    VALUES (@id, @userId, @name, @trigger, @response, 1, 0, @icon)
+  `);
+
+  const insertMany = sqliteDb.transaction(rows => {
+    rows.forEach(r => insert.run(r));
+  });
+
+  insertMany(TEMPLATES_DEFAULT_DATA.map(t => ({
+    id    : crypto.randomUUID(),
+    userId,
+    name  : t.name,
+    trigger: t.trigger,
+    response: t.response,
+    icon  : t.icon,
+  })));
+}
+
+function listTemplates(userId) {
+  return sqliteDb
+    .prepare('SELECT * FROM templates WHERE user_id = ? ORDER BY created_at ASC')
+    .all(userId);
+}
+
+function createTemplate(userId, { name, trigger, response, active = 1, icon = 'fa-bolt' }) {
+  const id = crypto.randomUUID();
+  sqliteDb.prepare(`
+    INSERT INTO templates (id, user_id, name, trigger, response, active, icon)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, userId, name, trigger, response, active ? 1 : 0, icon);
+  return sqliteDb.prepare('SELECT * FROM templates WHERE id = ?').get(id);
+}
+
+function updateTemplate(userId, id, patch) {
+  const allowed  = ['name', 'trigger', 'response', 'active', 'icon'];
+  const fields   = Object.keys(patch).filter(k => allowed.includes(k));
+  if (!fields.length) return null;
+
+  const setClause = fields.map(f => `${f} = @${f}`).join(', ');
+  const params    = { id, userId };
+  fields.forEach(f => {
+    params[f] = f === 'active' ? (patch[f] ? 1 : 0) : patch[f];
+  });
+
+  sqliteDb.prepare(`
+    UPDATE templates
+    SET ${setClause}, updated_at = datetime('now')
+    WHERE id = @id AND user_id = @userId
+  `).run(params);
+
+  return sqliteDb.prepare('SELECT * FROM templates WHERE id = ?').get(id);
+}
+
+function deleteTemplate(userId, id) {
+  const info = sqliteDb
+    .prepare('DELETE FROM templates WHERE id = ? AND user_id = ?')
+    .run(id, userId);
+  return info.changes > 0;
+}
+
+function incrementTemplateHit(templateId) {
+  sqliteDb
+    .prepare('UPDATE templates SET hits = hits + 1, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(templateId);
+}
+
+/**
+ * Testa o texto de um comentário contra os templates ativos do usuário.
+ * Retorna o primeiro template cujos gatilhos batem, ou null.
+ */
+function matchTemplate(userId, text) {
+  const active = sqliteDb
+    .prepare('SELECT * FROM templates WHERE user_id = ? AND active = 1 ORDER BY created_at ASC')
+    .all(userId);
+
+  const lower = (text || '').toLowerCase();
+
+  for (const tpl of active) {
+    const keywords = tpl.trigger
+      .split(',')
+      .map(k => k.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (keywords.some(kw => lower.includes(kw))) {
+      return tpl;
+    }
+  }
+  return null;
 }
 
 // #endregion
@@ -317,26 +452,99 @@ function getRecentComments(n) {
 function listComments({ page = 1, limit = 15, filter = 'all', q = '' }) {
   const uid = getActiveUserId();
   const db  = uid ? loadComments(uid) : {};
+
   let all = Object.entries(db)
     .filter(([k]) => !k.startsWith('__'))
     .map(([k, v]) => ({
-      id: k, user: v.username, text: v.text,
-      postUrl: v.postUrl, postShortcode: v.postShortcode,
-      postTitle: v.postTitle, thumbnailUrl: v.thumbnailUrl,
-      profilePic: v.profilePic || '',
-      replied: !!v.replied, reply: v.replyText,
-      repliedAt: v.repliedAt, timestamp: v.seenAt,
-    }))
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      id          : k,
+      user        : v.username,
+      text        : v.text,
+      postUrl     : v.postUrl,
+      postShortcode: v.postShortcode,
+      postTitle   : v.postTitle,
+      thumbnailUrl: v.thumbnailUrl,
+      profilePic  : v.profilePic || '',
+      replied     : !!v.replied,
+      reply       : v.replyText,
+      repliedAt   : v.repliedAt,
+      timestamp   : v.seenAt,
+      datetime    : v.datetime   || '',
+      timeLabel   : v.timeLabel  || '',
+      timeIsRelative: !!v.timeIsRelative,
+    }));
 
   if (filter === 'pending') all = all.filter(c => !c.replied);
   if (filter === 'replied') all = all.filter(c =>  c.replied);
-  if (q) all = all.filter(c => c.user?.toLowerCase().includes(q) || c.text?.toLowerCase().includes(q));
+  if (q) all = all.filter(c =>
+    c.user?.toLowerCase().includes(q) || c.text?.toLowerCase().includes(q));
+
+  // ── Ordenação: mais recente primeiro ──────────────────────────────────
+  all.sort((a, b) => {
+    const tsA = effectiveTimestamp(a);
+    const tsB = effectiveTimestamp(b);
+    return tsB - tsA;
+  });
 
   const total = all.length;
   const pages = Math.ceil(total / limit) || 1;
   const items = all.slice((page - 1) * limit, page * limit);
   return { items, total, page, pages };
+}
+
+/**
+ * Resolve o timestamp efetivo de um comentário para ordenação.
+ *
+ * Prioridade:
+ *   1. datetime exato do Instagram (via <time datetime="...">)
+ *   2. timeLabel relativo convertido em ms a partir de agora
+ *   3. seenAt (fallback — quando dois comentários têm o mesmo seenAt,
+ *      o relativo mais curto = mais recente)
+ */
+function effectiveTimestamp(c) {
+  // 1. Datetime exato
+  if (c.datetime) {
+    const t = Date.parse(c.datetime);
+    if (!isNaN(t)) return t;
+  }
+
+  // 2. timeLabel relativo: "17 min", "2h", "1 d", "1 sem.", "3w", etc.
+  if (c.timeIsRelative && c.timeLabel) {
+    const ms = parseLabelToMs(c.timeLabel);
+    if (ms !== null) return Date.now() - ms;
+  }
+
+  // 3. Fallback: seenAt
+  return c.timestamp ? Date.parse(c.timestamp) : 0;
+}
+
+/**
+ * Converte um timeLabel relativo do Instagram em milissegundos de diferença.
+ * Retorna null se não conseguir parsear.
+ * Exemplos: "17 min", "2h", "1 d", "1 sem.", "2w", "3s"
+ */
+function parseLabelToMs(label) {
+  if (!label) return null;
+  const txt = label.trim().toLowerCase();
+
+  const match = txt.match(/^(\d+)\s*(s|seg\.?|m|min\.?|h|d|w|sem\.?)$/);
+  if (!match) return null;
+
+  const n    = parseInt(match[1], 10);
+  const unit = match[2].replace(/\./, '');
+
+  const map = {
+    s: 1000,
+    seg: 1000,
+    m: 60_000,
+    min: 60_000,
+    h: 3_600_000,
+    d: 86_400_000,
+    w: 604_800_000,
+    sem: 604_800_000,
+  };
+
+  const factor = map[unit] ?? null;
+  return factor !== null ? n * factor : null;
 }
 // #endregion
 
@@ -353,23 +561,37 @@ function buildPrompt(systemPrompt, username, text) {
 }
 
 async function autoReplyFn(userId, comment) {
-  try {
-    const cfg        = loadUserCfg(userId);
-    const prompt     = buildPrompt(cfg.systemPrompt || null, comment.username, comment.text);
-    const reply      = await askGemini(prompt);
-    if (!reply) throw new Error('Resposta vazia da IA');
+  const compositeKey =
+    comment.key ??
+    comment.id ??
+    (comment.username && comment.postShortcode && comment.commentId
+      ? `${comment.username}::${comment.postShortcode}::${comment.commentId}`
+      : null);
 
-    const data = loadComments(userId);
-    if (data[comment.id]) {
-      data[comment.id].replied   = true;
-      data[comment.id].replyText = reply;
-      data[comment.id].repliedAt = new Date().toISOString();
-      saveComments(userId, data);
+  if (!compositeKey) {
+    addLog(`⚠️ autoReplyFn: chave indefinida para @${comment.username} — abortando`, 'warn');
+    return null;
+  }
+
+  try {
+    const matched = matchTemplate(userId, comment.text);
+
+    if (matched) {
+      const reply = matched.response;
+      incrementTemplateHit(matched.id);
+      // ← NÃO salva replied:true aqui; replyToComment fará isso após postar
+      addLog(`⚡ Template "${matched.name}" respondeu @${comment.username}`, 'ok');
+      return reply;
     }
-    addLog(`✅ IA respondeu @${comment.username}`, 'ok');
+
+    const cfg    = loadUserCfg(userId);
+    const prompt = buildPrompt(cfg.systemPrompt || null, comment.username, comment.text);
+    const reply  = await askGemini(prompt);
+    if (!reply) throw new Error('Resposta vazia da IA');
     return reply;
+
   } catch (e) {
-    addLog(`❌ Erro IA para @${comment.username}: ${e.message}`, 'error');
+    addLog(`❌ Erro ao responder @${comment.username}: ${e.message}`, 'error');
     return null;
   }
 }
@@ -419,7 +641,23 @@ async function startUserBot(userId) {
       intervalMs      : cfg.scanInterval * 60 * 1000,
       scrolls         : 5,
       autoReply       : cfg.autoReply,
-      replyFn         : comment => autoReplyFn(userId, comment),
+      replyFn         : async (comment) => {
+        // Resolve o texto E os metadados
+        const compositeKey =
+          comment.key ??
+          (comment.username && comment.postShortcode && comment.commentId
+            ? `${comment.username}::${comment.postShortcode}::${comment.commentId}`
+            : null);
+    
+        const result = await autoReplyFn(userId, comment);
+        if (!result) return null;
+    
+        // Após replyToComment ter sucesso (chamado pelo watcher),
+        // precisamos gravar os metadados — fazemos isso via hook pós-reply.
+        // Armazena no closure para o watcher usar depois.
+        comment.__meta = result.meta ?? { replySource: 'ai' };
+        return result.text ?? result;
+      },
       replyDelayMs    : cfg.delay * 1000,
       sessionPath     : getSessionPath(userId, 'monitor'),
       userDataDir     : getUserDataDir(userId, 'monitor'),
@@ -439,15 +677,32 @@ async function startUserBot(userId) {
 
     watcher.on('new', comments => {
       const data = loadComments(userId);
+    
       comments.forEach(c => {
-        if (!data[c.id]) data[c.id] = { ...c, seenAt: new Date().toISOString(), replied: false };
+        // registerComment usa a mesma lógica de chave do comments.js
+        // evita qualquer divergência de formato
+        const key = `${c.username}::${c.postShortcode}::${c.commentId}`;
+        if (!key || key.includes('undefined')) {
+          addLog(`[${label}] Comentário sem chave válida de @${c.username} — ignorado`, 'warn');
+          return;
+        }
+        if (!data[key]) {
+          data[key] = { ...c, seenAt: new Date().toISOString(), replied: false };
+        }
       });
+    
       saveComments(userId, data);
+    
       comments.forEach(c => addLog(`[${label}] Novo comentário de @${c.username}`, 'info'));
+    
       broadcast('new_comments', {
         count   : comments.length,
-        previews: comments.map(c => ({ id: c.id, user: c.username, text: (c.text || '').slice(0, 80) })),
-        stats   : state.stats,
+        previews: comments.map(c => ({
+          id  : `${c.username}::${c.postShortcode}::${c.commentId}`,
+          user: c.username,
+          text: (c.text || '').slice(0, 80),
+        })),
+        stats: state.stats,
       });
     });
 
@@ -817,6 +1072,69 @@ app.get('/api/proxy/image', (req, res) => {
   req2.on('error', e => { if (!res.headersSent) res.status(502).send('Erro: ' + e.message); });
   req2.end();
 });
+// #endregion
+
+// #region Routes — Templates
+
+app.get('/api/templates', requireAuth, (req, res) => {
+  try {
+    const rows = listTemplates(req.userId);
+    // Normaliza active para boolean para o front
+    res.json(rows.map(t => ({ ...t, active: !!t.active })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/templates', requireAuth, (req, res) => {
+  const { name, trigger, response, active, icon } = req.body || {};
+  if (!name?.trim() || !trigger?.trim() || !response?.trim())
+    return res.status(400).json({ message: 'name, trigger e response são obrigatórios.' });
+  try {
+    const tpl = createTemplate(req.userId, { name, trigger, response, active, icon });
+    addLog(`[${req.user.email}] Template criado: "${name}"`, 'ok');
+    res.status(201).json({ ...tpl, active: !!tpl.active });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/templates/:id', requireAuth, (req, res) => {
+  const { name, trigger, response, active, icon } = req.body || {};
+  try {
+    const updated = updateTemplate(req.userId, req.params.id, { name, trigger, response, active, icon });
+    if (!updated) return res.status(404).json({ message: 'Template não encontrado.' });
+    addLog(`[${req.user.email}] Template atualizado: "${updated.name}"`, 'ok');
+    res.json({ ...updated, active: !!updated.active });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/templates/:id', requireAuth, (req, res) => {
+  try {
+    const ok = deleteTemplate(req.userId, req.params.id);
+    if (!ok) return res.status(404).json({ message: 'Template não encontrado.' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch('/api/templates/:id/toggle', requireAuth, (req, res) => {
+  try {
+    const current = sqliteDb
+      .prepare('SELECT active FROM templates WHERE id = ? AND user_id = ?')
+      .get(req.params.id, req.userId);
+    if (!current) return res.status(404).json({ message: 'Template não encontrado.' });
+
+    const updated = updateTemplate(req.userId, req.params.id, { active: !current.active });
+    res.json({ ...updated, active: !!updated.active });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // #endregion
 
 // #region Init
