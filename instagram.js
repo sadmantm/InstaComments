@@ -30,15 +30,22 @@ async function launchBrowser(headless = true, userDataDir = USER_DATA_DIR) {
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-software-rasterizer',
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--disable-sync',
+    '--disable-translate',
+    '--disable-features=VizDisplayCompositor',
     '--window-size=1280,800',
   ];
 
-  // --single-process e --no-zygote são flags Linux/Docker
-  // No Windows causam crash imediato do frame
   if (!isWindows) {
-    args.push('--no-zygote', '--single-process');
+    // REMOVIDO: --single-process e --no-zygote causam crash no Linux moderno
+    // com Chromium/Chrome 112+
+    args.push('--no-zygote');
   }
 
   return puppeteer.launch({
@@ -46,9 +53,7 @@ async function launchBrowser(headless = true, userDataDir = USER_DATA_DIR) {
     userDataDir,
     args,
     defaultViewport: { width: 1280, height: 800 },
-    // No Windows o Puppeteer às vezes não acha o Chrome — garante o caminho
-    // Se der erro de executablePath, descomente e ajuste:
-    // executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    timeout: 60_000,
   });
 }
 
