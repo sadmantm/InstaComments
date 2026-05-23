@@ -24,36 +24,85 @@ const SEL = {
 // ─── Launch ───────────────────────────────────────────────────────────────────
 
 async function launchBrowser(headless = true, userDataDir = USER_DATA_DIR) {
-  const isWindows = process.platform === 'win32';
+  // Garante que o userDataDir existe (evita erro silencioso de I/O na primeira run)
+  try {
+    fs.mkdirSync(userDataDir, { recursive: true });
+  } catch (_) {}
+
+  // Detecta locks órfãos do Chromium (PID antigo travado) e remove
+  // — causa comum de "chrome-error://chromewebdata" quando o profile está sujo
+  try {
+    const lockFiles = [
+      path.join(userDataDir, 'SingletonLock'),
+      path.join(userDataDir, 'SingletonCookie'),
+      path.join(userDataDir, 'SingletonSocket'),
+    ];
+    for (const f of lockFiles) {
+      if (fs.existsSync(f)) {
+        try { fs.unlinkSync(f); } catch (_) {}
+      }
+    }
+  } catch (_) {}
 
   const args = [
+    // — Sandbox: obrigatório em EC2 rodando como ubuntu/root sem userns —
     '--no-sandbox',
     '--disable-setuid-sandbox',
+
+    // — Memória compartilhada: /dev/shm é só 64MB em EC2 small/medium —
     '--disable-dev-shm-usage',
+
+    // — GPU: não existe em servidor headless —
     '--disable-gpu',
-    '--disable-software-rasterizer',
+    '--use-gl=swiftshader',          // fallback de software para WebGL/canvas
+    '--disable-accelerated-2d-canvas',
+
+    // — Anti-detecção mínima para Instagram —
     '--disable-blink-features=AutomationControlled',
-    '--disable-infobars',
-    '--disable-extensions',
+
+    // — Performance/estabilidade em servidor —
     '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-features=IsolateOrigins,site-per-process,TranslateUI',
+    '--disable-ipc-flooding-protection',
+    '--disable-hang-monitor',
+    '--disable-popup-blocking',
+    '--disable-prompt-on-repost',
     '--disable-sync',
     '--disable-translate',
-    '--disable-features=VizDisplayCompositor',
+    '--disable-extensions',
+    '--disable-default-apps',
+    '--disable-component-update',
+    '--disable-domain-reliability',
+    '--metrics-recording-only',
+    '--mute-audio',
+    '--no-default-browser-check',
+    '--no-first-run',
+    '--no-pings',
+    '--password-store=basic',
+    '--use-mock-keychain',
+
+    // — Network/DNS confiável em EC2 —
+    '--dns-prefetch-disable',
+
+    // — Locale e UA-hints (Instagram olha) —
+    '--lang=pt-BR,pt;q=0.9,en;q=0.8',
+
+    // — Janela —
     '--window-size=1280,800',
   ];
 
-  if (!isWindows) {
-    // REMOVIDO: --single-process e --no-zygote causam crash no Linux moderno
-    // com Chromium/Chrome 112+
-    args.push('--no-zygote');
-  }
-
   return puppeteer.launch({
-    headless: headless ? 'new' : false,
+    headless: true,
     userDataDir,
     args,
     defaultViewport: { width: 1280, height: 800 },
+    ignoreHTTPSErrors: true,
     timeout: 60_000,
+    // dumpio: true,   // ative se precisar ver os logs do Chromium no stderr
+    protocolTimeout: 120_000,            // evita timeout em CDP em máquinas pequenas
   });
 }
 
