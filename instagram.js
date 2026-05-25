@@ -106,7 +106,6 @@ async function launchBrowser(headless = true, userDataDir = USER_DATA_DIR) {
   });
 }
 
-
 // ─── Session helpers ──────────────────────────────────────────────────────────
 
 async function saveSession(page, sessionPath = SESSION_PATH) {
@@ -575,7 +574,8 @@ async function loginProfile({ userId, username, password, profile, sessionPath, 
   } catch (err) {
     console.error(`[${profile}] FALHOU no step — ${err.message}`);
     console.error(`[${profile}] stack: ${err.stack?.split('\n')[1]}`);
-
+    const ss = path.resolve(`./error_${profile}_${Date.now()}.png`);
+    await page.screenshot({ path: ss, fullPage: true });
     if (err.code !== 'WRONG_CREDENTIALS') {
       try { await browser.close(); } catch (_) {}
     }
