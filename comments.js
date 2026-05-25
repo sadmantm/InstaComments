@@ -429,7 +429,7 @@ const helperSrc = `
     for (const el of els) {
       if (el.querySelector('time')) continue;
       const t = el.innerText.trim();
-      if (!t || t === username || t === 'Responder') continue;
+      if (!t || t === username || /^(responder|reply)$/i.test(t)) continue;
       if (/^\\d+\\s+curtida/.test(t.toLowerCase())) continue;
       return t;
     }
@@ -439,7 +439,7 @@ const helperSrc = `
   function getActionRow(container) {
     const buttons = [...container.querySelectorAll('[role="button"]')];
     for (const btn of buttons) {
-      if (btn.innerText.trim() === 'Responder') return btn.parentElement;
+      if (/^(responder|reply)$/i.test(btn.innerText.trim())) return btn.parentElement;
     }
     return null;
   }
@@ -447,13 +447,13 @@ const helperSrc = `
   function getReplyButton(container) {
     const row = getActionRow(container);
     if (!row) return null;
-    return [...row.querySelectorAll('[role="button"]')].find(b => b.innerText.trim() === 'Responder') || null;
+    return [...row.querySelectorAll('[role="button"]')].find(b => /^(responder|reply)$/i.test(b.innerText.trim())) || null;
   }
 
   function getLikeButton(container) {
     const row = getActionRow(container);
     if (!row) return null;
-    return [...row.parentElement.querySelectorAll('[role="button"]')].find(b => !!b.querySelector('svg[aria-label="Curtir"]')) || null;
+    return [...row.parentElement.querySelectorAll('[role="button"]')].find(b => !!b.querySelector('svg[aria-label="Like"], svg[aria-label="Curtir"]')) || null;
   }
 
   function hasReplyButton(c) { return !!getReplyButton(c); }
