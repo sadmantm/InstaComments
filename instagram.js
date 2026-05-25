@@ -87,9 +87,6 @@ async function launchBrowser(headless = true, userDataDir = USER_DATA_DIR) {
     // — Network/DNS confiável em EC2 —
     '--dns-prefetch-disable',
 
-    // — Locale e UA-hints (Instagram olha) —
-    '--lang=pt-BR,pt;q=0.9,en;q=0.8',
-
     // — Janela —
     '--window-size=1280,800',
   ];
