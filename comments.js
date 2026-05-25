@@ -524,46 +524,6 @@ const helperSrc = `
   }
 `;
 
-// ── Trecho corrigido dentro de replyToComment ────────────────────────────────
-// Substitua o bloco do waitForSelector em diante por este:
-
-const textarea = await page.waitForSelector(
-  'textarea[placeholder="Add a comment\u2026"]',   // … = \u2026
-  { visible: true, timeout: 8000 }
-);
-
-await page.waitForFunction(
-  () => {
-    const ta = document.querySelector('textarea[placeholder="Add a comment\u2026"]');
-    return ta && ta.value.trim().length > 0;
-  },
-  { timeout: 6000 }
-).catch(() => {
-  console.warn('[reply] Timeout aguardando @mention na textarea. Continuando mesmo assim.');
-});
-
-await textarea.click();
-await page.keyboard.press('End');
-
-const existingText = await page.evaluate(() => {
-  const ta = document.querySelector('textarea[placeholder="Add a comment\u2026"]');
-  return ta ? ta.value : '';
-});
-
-const prefix = existingText.endsWith(' ') ? '' : ' ';
-await textarea.type(prefix + replyText, { delay: 40 });
-await sleep(500);
-
-const posted = await page.evaluate(() => {
-  const btn = [...document.querySelectorAll('[role="button"]')]
-    .find(b => /^post$/i.test((b.innerText || b.textContent || '').trim()));
-  if (!btn) return false;
-  btn.click();
-  return true;
-});
-
-if (!posted) throw new Error('Botão "Post" não encontrado.');
-
 async function replyToComment(
   commentKey,
   replyText,
@@ -643,33 +603,25 @@ async function replyToComment(
         await sleep(1500);
 
         const textarea = await page.waitForSelector(
-          'textarea[placeholder="Add a comment…"], textarea[placeholder="Adicione um comentário..."]',
+          'textarea[placeholder="Add a comment\u2026"]',   // … = \u2026
           { visible: true, timeout: 8000 }
         );
         
-        // Aguarda o Instagram preencher o @username na textarea
         await page.waitForFunction(
           () => {
-            const ta = document.querySelector(
-              'textarea[placeholder="Add a comment…"], textarea[placeholder="Adicione um comentário..."]'
-            );
-            if (!ta) return false;
-            return ta.value.trim().length > 0;
+            const ta = document.querySelector('textarea[placeholder="Add a comment\u2026"]');
+            return ta && ta.value.trim().length > 0;
           },
           { timeout: 6000 }
         ).catch(() => {
           console.warn('[reply] Timeout aguardando @mention na textarea. Continuando mesmo assim.');
         });
         
-        // Garante foco e posiciona cursor no fim
         await textarea.click();
         await page.keyboard.press('End');
         
-        // Lê o que o Instagram já colocou (ex: "@username ")
         const existingText = await page.evaluate(() => {
-          const ta = document.querySelector(
-            'textarea[placeholder="Add a comment…"], textarea[placeholder="Adicione um comentário..."]'
-          );
+          const ta = document.querySelector('textarea[placeholder="Add a comment\u2026"]');
           return ta ? ta.value : '';
         });
         
@@ -677,10 +629,9 @@ async function replyToComment(
         await textarea.type(prefix + replyText, { delay: 40 });
         await sleep(500);
         
-        // Clica no botão Post / Postar
         const posted = await page.evaluate(() => {
           const btn = [...document.querySelectorAll('[role="button"]')]
-            .find(b => /^(post|postar)$/i.test(b.innerText.trim()));
+            .find(b => /^post$/i.test((b.innerText || b.textContent || '').trim()));
           if (!btn) return false;
           btn.click();
           return true;
