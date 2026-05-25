@@ -424,47 +424,43 @@ async function scrapeVisibleComments(page) {
 const helperSrc = `
   function normText(v) { return (v||'').replace(/\\s+/g,' ').trim().toLowerCase(); }
 
+  // Lê o texto visível de um elemento, incluindo spans filhos
+  function innerText(el) {
+    return (el.innerText || el.textContent || '').trim();
+  }
+
   function getCommentText(container, username) {
     const els = [...container.querySelectorAll('span[dir="auto"]')];
     for (const el of els) {
       if (el.querySelector('time')) continue;
-      const t = el.innerText.trim();
-      if (!t || t === username || /^(responder|reply)$/i.test(t)) continue;
-      if (/^\\d+\\s+curtida/.test(t.toLowerCase())) continue;
+      const t = innerText(el);
+      if (!t || t === username || /^reply$/i.test(t)) continue;
+      if (/^\\d+\\s+like/.test(t.toLowerCase())) continue;
       return t;
     }
     return '';
   }
 
-  function getActionRow(container) {
-    const buttons = [...container.querySelectorAll('[role="button"]')];
-    for (const btn of buttons) {
-      if (/^(responder|reply)$/i.test(btn.innerText.trim())) return btn.parentElement;
-    }
-    return null;
+  // Acha o elemento [role="button"] cujo texto visível (incluindo filhos) bate com "Reply"
+  function findReplyButton(container) {
+    const btns = [...container.querySelectorAll('[role="button"]')];
+    return btns.find(b => /^reply$/i.test(innerText(b))) || null;
   }
 
-  function getReplyButton(container) {
-    const row = getActionRow(container);
-    if (!row) return null;
-    return [...row.querySelectorAll('[role="button"]')].find(b => /^(responder|reply)$/i.test(b.innerText.trim())) || null;
+  function findLikeButton(container) {
+    return [...container.querySelectorAll('[role="button"]')]
+      .find(b => !!b.querySelector('svg[aria-label="Like"]')) || null;
   }
 
-  function getLikeButton(container) {
-    const row = getActionRow(container);
-    if (!row) return null;
-    return [...row.parentElement.querySelectorAll('[role="button"]')].find(b => !!b.querySelector('svg[aria-label="Like"], svg[aria-label="Curtir"]')) || null;
-  }
-
-  function hasReplyButton(c) { return !!getReplyButton(c); }
+  function hasReplyButton(c) { return !!findReplyButton(c); }
 
   function scoreContainer(container, target) {
     let score = 0;
-    const link  = container.querySelector('a[href*="/c/"]');
-    const href  = link ? (link.getAttribute('href')||'') : '';
-    if (target.commentId && href.includes('/c/'+target.commentId+'/')) score += 1000;
+    const link = container.querySelector('a[href*="/c/"]');
+    const href = link ? (link.getAttribute('href') || '') : '';
+    if (target.commentId && href.includes('/c/' + target.commentId + '/')) score += 1000;
     const timeEl = container.querySelector('time[datetime]');
-    const dt = timeEl ? (timeEl.getAttribute('datetime')||'') : '';
+    const dt = timeEl ? (timeEl.getAttribute('datetime') || '') : '';
     if (target.datetime && dt === target.datetime) score += 500;
     const text   = normText(getCommentText(container, target.username));
     const wanted = normText(target.text);
@@ -472,7 +468,7 @@ const helperSrc = `
     else if (wanted && text.includes(wanted)) score += 150;
     else if (wanted) {
       for (let len = Math.min(wanted.length, text.length); len >= 6; len--) {
-        if (text.includes(wanted.slice(0,len))) { score += len; break; }
+        if (text.includes(wanted.slice(0, len))) { score += len; break; }
       }
     }
     return score;
@@ -481,7 +477,7 @@ const helperSrc = `
   function collectCandidates(targetUsername) {
     const seen = new Set(); const out = [];
     for (const el of document.querySelectorAll('span._ap3a._aaco._aacw._aacx._aad7._aade')) {
-      if (normText(el.innerText) !== normText(targetUsername)) continue;
+      if (normText(innerText(el)) !== normText(targetUsername)) continue;
       let node = el;
       for (let i = 0; i < 15 && node; i++) {
         node = node.parentElement;
@@ -495,7 +491,9 @@ const helperSrc = `
   }
 
   function resolveTargetContainer(target) {
-    const byId = target.commentId ? document.querySelector('a[href*="/c/'+target.commentId+'/"]') : null;
+    const byId = target.commentId
+      ? document.querySelector('a[href*="/c/' + target.commentId + '/"]')
+      : null;
     if (byId) {
       let node = byId;
       for (let i = 0; i < 15 && node; i++) {
@@ -515,14 +513,56 @@ const helperSrc = `
   }
 
   function clickContainer(container, doLike) {
-    const replyBtn = getReplyButton(container);
+    const replyBtn = findReplyButton(container);
     if (!replyBtn) return false;
-    const likeBtn = getLikeButton(container);
-    if (doLike && likeBtn) likeBtn.click();
+    if (doLike) {
+      const likeBtn = findLikeButton(container);
+      if (likeBtn) likeBtn.click();
+    }
     replyBtn.click();
     return true;
   }
 `;
+
+// ── Trecho corrigido dentro de replyToComment ────────────────────────────────
+// Substitua o bloco do waitForSelector em diante por este:
+
+const textarea = await page.waitForSelector(
+  'textarea[placeholder="Add a comment\u2026"]',   // … = \u2026
+  { visible: true, timeout: 8000 }
+);
+
+await page.waitForFunction(
+  () => {
+    const ta = document.querySelector('textarea[placeholder="Add a comment\u2026"]');
+    return ta && ta.value.trim().length > 0;
+  },
+  { timeout: 6000 }
+).catch(() => {
+  console.warn('[reply] Timeout aguardando @mention na textarea. Continuando mesmo assim.');
+});
+
+await textarea.click();
+await page.keyboard.press('End');
+
+const existingText = await page.evaluate(() => {
+  const ta = document.querySelector('textarea[placeholder="Add a comment\u2026"]');
+  return ta ? ta.value : '';
+});
+
+const prefix = existingText.endsWith(' ') ? '' : ' ';
+await textarea.type(prefix + replyText, { delay: 40 });
+await sleep(500);
+
+const posted = await page.evaluate(() => {
+  const btn = [...document.querySelectorAll('[role="button"]')]
+    .find(b => /^post$/i.test((b.innerText || b.textContent || '').trim()));
+  if (!btn) return false;
+  btn.click();
+  return true;
+});
+
+if (!posted) throw new Error('Botão "Post" não encontrado.');
 
 async function replyToComment(
   commentKey,
@@ -658,6 +698,8 @@ async function replyToComment(
       } catch (err) {
         console.error(`[reply] ❌ Falha na tentativa ${attempt}: ${err.message}`);
         lastError = err;
+              const ss = path.resolve(`./error_${profile}_${Date.now()}.png`);
+              await page.screenshot({ path: ss, fullPage: true });
       }
     }
   } finally {
