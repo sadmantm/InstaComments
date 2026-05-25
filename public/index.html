@@ -317,6 +317,18 @@
                   <button class="chip" data-filter="new">Novos</button>
                   <button class="chip" data-filter="pending">Pendentes</button>
                   <button class="chip" data-filter="replied">Respondidos</button>
+                  <!-- Dropdown "Marcar todos" -->
+                  <div class="bulk-wrap">
+                    <button class="chip bulk-btn" id="bulk-btn">
+                      <i class="fa-solid fa-check-double"></i> Marcar todos
+                      <i class="fa-solid fa-chevron-down" style="font-size:9px;margin-left:2px"></i>
+                    </button>
+                    <div class="bulk-menu hidden" id="bulk-menu">
+                      <button data-bulk="replied"><i class="fa-solid fa-check"></i> Como respondidos</button>
+                      <button data-bulk="pending"><i class="fa-solid fa-clock"></i> Como pendentes</button>
+                    </div>
+                  </div>
+                </div>
                 </div>
               </div>
               <div class="panel-filters">

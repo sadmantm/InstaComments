@@ -627,6 +627,63 @@ async function markAsRepliedApi(commentId) {
   }
 }
 
+function initBulkActions() {
+  const btn  = document.getElementById('bulk-btn');
+  const menu = document.getElementById('bulk-menu');
+
+  // Abre/fecha dropdown
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    menu.classList.toggle('hidden');
+  });
+
+  // Fecha ao clicar fora
+  document.addEventListener('click', () => menu.classList.add('hidden'));
+
+  // Ações
+  menu.addEventListener('click', async e => {
+    const action = e.target.closest('[data-bulk]')?.dataset.bulk;
+    if (!action) return;
+    menu.classList.add('hidden');
+
+    const targets = state.comments.filter(c =>
+      action === 'replied' ? !c.replied : c.replied
+    );
+
+    if (!targets.length) {
+      showToast('info', 'Nenhum comentário para alterar.');
+      return;
+    }
+
+    const label = action === 'replied' ? 'respondidos' : 'pendentes';
+    if (!confirm(`Marcar ${targets.length} comentário(s) como ${label}?`)) return;
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Aguarde…';
+
+    let ok = 0, fail = 0;
+    await Promise.all(targets.map(async c => {
+      try {
+        await apiFetch(`/api/comments/${c.id}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ replied: action === 'replied' }),
+        });
+        c.replied = action === 'replied';
+        if (action === 'replied') c.repliedAt = c.repliedAt || new Date().toISOString();
+        ok++;
+      } catch (_) { fail++; }
+    }));
+
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check-double"></i> Marcar todos <i class="fa-solid fa-chevron-down" style="font-size:9px;margin-left:2px"></i>';
+
+    renderComments();
+    syncStats();
+
+    if (fail) showToast('error', `${ok} atualizados, ${fail} falhou.`);
+    else showToast('success', `${ok} comentário(s) marcados como ${label}.`);
+  });
+}
 
 async function syncStats() {
   try {
@@ -1419,7 +1476,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   initSettings();
   initHeader();
   loadTemplates();
-
+  initBulkActions();
+  
   await loadDashboard();
   await initAutomation();
 
