@@ -679,15 +679,18 @@ async function startUserBot(userId) {
       const data = loadComments(userId);
     
       comments.forEach(c => {
-        // registerComment usa a mesma lógica de chave do comments.js
-        // evita qualquer divergência de formato
         const key = `${c.username}::${c.postShortcode}::${c.commentId}`;
-        if (!key || key.includes('undefined')) {
-          addLog(`[${label}] Comentário sem chave válida de @${c.username} — ignorado`, 'warn');
-          return;
-        }
-        if (!data[key]) {
-          data[key] = { ...c, seenAt: new Date().toISOString(), replied: false };
+        if (!key.includes('undefined') && !data[key]) {
+          // Verifica se já existe variante respondida com fake ID
+          const alreadyReplied = Object.values(data).some(
+            v => v.username === c.username &&
+                 v.postShortcode === c.postShortcode &&
+                 v.text === c.text &&
+                 v.replied === true
+          );
+          if (!alreadyReplied) {
+            data[key] = { ...c, seenAt: new Date().toISOString(), replied: false };
+          }
         }
       });
     
