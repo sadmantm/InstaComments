@@ -1476,8 +1476,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initSettings();
   initHeader();
   loadTemplates();
-  initBulkActions();
-  
+
   await loadDashboard();
   await initAutomation();
 
