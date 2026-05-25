@@ -583,7 +583,7 @@ function renderActivityChart(hourly) {
 
 /* ── Comentários ────────────────────────────────────────── */
 async function loadComments(page = 1) {
-  const params = new URLSearchParams({ page, limit: 20 });
+  const params = new URLSearchParams({ page, limit: 200 }); // limit alto para pegar tudo
 
   if (state.filterStatus !== 'all') {
     if (state.filterStatus === 'replied') params.set('filter', 'replied');
@@ -602,6 +602,40 @@ async function loadComments(page = 1) {
     showToast('error', 'Erro ao carregar comentários: ' + e.message);
   }
 }
+
+async function markAsRepliedApi(commentId) {
+  const comment = state.comments.find(c => String(c.id) === String(commentId));
+  if (!comment) return;
+
+  try {
+    await apiFetch(`/api/comments/${commentId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ replied: true }),
+    });
+
+    comment.replied   = true;
+    comment.repliedAt = comment.repliedAt || new Date().toISOString();
+
+    renderComments();
+    if (String(state.selectedComment) === String(commentId)) {
+      renderDetail(comment);
+    }
+    showToast('success', 'Comentário marcado como respondido.');
+    syncStats();
+  } catch (e) {
+    showToast('error', 'Erro ao marcar como respondido: ' + e.message);
+  }
+}
+
+
+async function syncStats() {
+  try {
+    const data = await apiFetch('/api/state');
+    state.stats = data.stats;
+    updateBadge(data.stats.pending ?? 0);
+  } catch (_) {}
+}
+
 
 function getFilteredComments() {
   let list = state.comments;
@@ -722,14 +756,10 @@ document.addEventListener('click', e => {
       showToast('info', 'Função de status disponível via bot.');
       break;
 
-    case 'replied':
-      if (comment) {
-        comment.replied = true;
-        renderComments();
-        if (state.selectedComment === _commentId) renderDetail(comment);
-        showToast('success', 'Comentário marcado como respondido.');
-      }
-      break;
+      case 'replied':
+        markAsRepliedApi(_commentId);
+        break;
+      
 
     case 'instagram': {
       const url = _shortcode

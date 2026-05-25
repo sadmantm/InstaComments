@@ -857,6 +857,22 @@ app.post('/api/instagram/resend2fa', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.patch('/api/comments/:id/status', requireAuth, (req, res) => {
+  const key     = req.params.id;
+  const { replied } = req.body ?? {};
+
+  const data = loadComments(req.userId);
+  if (!data[key]) return res.status(404).json({ error: 'Comentário não encontrado.' });
+
+  data[key].replied   = !!replied;
+  data[key].repliedAt = replied ? (data[key].repliedAt || new Date().toISOString()) : null;
+
+  saveComments(req.userId, data);
+  syncAllStats();
+
+  res.json({ ok: true });
+});
+
 // #endregion
 
 // #region Routes — Comments / Bot
