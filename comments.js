@@ -602,55 +602,52 @@ async function replyToComment(
 
         await sleep(1500);
 
-const textarea = await page.waitForSelector(
-  'textarea[placeholder="Adicione um comentário..."]',
-  { visible: true, timeout: 8000 }
-);
-
-// ── FIX: aguarda o Instagram preencher o @username na textarea ──────────
-// O Instagram injeta a menção de forma assíncrona após o clique em Responder.
-// Se digitarmos antes, sobrescrevemos ou perdemos o @username,
-// fazendo o reply virar um comentário solto em vez de reply encadeado.
-
-await page.waitForFunction(
-  () => {
-    const ta = document.querySelector('textarea[placeholder="Adicione um comentário..."]');
-    if (!ta) return false;
-    const val = ta.value.trim();
-    // Aguarda até ter algum conteúdo (o @username inserido pelo Instagram)
-    return val.length > 0;
-  },
-  { timeout: 6000 }
-).catch(() => {
-  // Se não preencheu em 6s, loga mas continua — melhor tentar do que abortar
-  console.warn('[reply] Timeout aguardando @mention na textarea. Continuando mesmo assim.');
-});
-
-// Garante foco e posiciona cursor no fim do conteúdo já existente
-await textarea.click();
-await page.keyboard.press('End');
-
-// Lê o que o Instagram já colocou na textarea (ex: "@username ")
-const existingText = await page.evaluate(() => {
-  const ta = document.querySelector('textarea[placeholder="Adicione um comentário..."]');
-  return ta ? ta.value : '';
-});
-
-// Se já tem o @mention, só adiciona o texto depois
-// Se não tem nada (fallback), digita normalmente
-const prefix = existingText.endsWith(' ') ? '' : ' ';
-await textarea.type(prefix + replyText, { delay: 40 });
-await sleep(500);
-
+        const textarea = await page.waitForSelector(
+          'textarea[placeholder="Add a comment…"], textarea[placeholder="Adicione um comentário..."]',
+          { visible: true, timeout: 8000 }
+        );
+        
+        // Aguarda o Instagram preencher o @username na textarea
+        await page.waitForFunction(
+          () => {
+            const ta = document.querySelector(
+              'textarea[placeholder="Add a comment…"], textarea[placeholder="Adicione um comentário..."]'
+            );
+            if (!ta) return false;
+            return ta.value.trim().length > 0;
+          },
+          { timeout: 6000 }
+        ).catch(() => {
+          console.warn('[reply] Timeout aguardando @mention na textarea. Continuando mesmo assim.');
+        });
+        
+        // Garante foco e posiciona cursor no fim
+        await textarea.click();
+        await page.keyboard.press('End');
+        
+        // Lê o que o Instagram já colocou (ex: "@username ")
+        const existingText = await page.evaluate(() => {
+          const ta = document.querySelector(
+            'textarea[placeholder="Add a comment…"], textarea[placeholder="Adicione um comentário..."]'
+          );
+          return ta ? ta.value : '';
+        });
+        
+        const prefix = existingText.endsWith(' ') ? '' : ' ';
+        await textarea.type(prefix + replyText, { delay: 40 });
+        await sleep(500);
+        
+        // Clica no botão Post / Postar
         const posted = await page.evaluate(() => {
           const btn = [...document.querySelectorAll('[role="button"]')]
-            .find(b => b.innerText.trim() === 'Postar');
+            .find(b => /^(post|postar)$/i.test(b.innerText.trim()));
           if (!btn) return false;
           btn.click();
           return true;
         });
-
-        if (!posted) throw new Error('Botão "Postar" não encontrado.');
+        
+        if (!posted) throw new Error('Botão "Post" não encontrado.');
+        
 
         await sleep(2000);
 
