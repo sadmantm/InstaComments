@@ -310,6 +310,7 @@
         <section class="section hidden" id="section-comments">
           <div class="comments-layout">
             <div class="comments-panel" id="comments-panel">
+        
               <div class="panel-header">
                 <h2 class="panel-title">Comentários</h2>
                 <div class="panel-controls">
@@ -317,7 +318,6 @@
                   <button class="chip" data-filter="new">Novos</button>
                   <button class="chip" data-filter="pending">Pendentes</button>
                   <button class="chip" data-filter="replied">Respondidos</button>
-                  <!-- Dropdown "Marcar todos" -->
                   <div class="bulk-wrap">
                     <button class="chip bulk-btn" id="bulk-btn">
                       <i class="fa-solid fa-check-double"></i> Marcar todos
@@ -329,8 +329,8 @@
                     </div>
                   </div>
                 </div>
-                </div>
-              </div>
+              </div><!-- /panel-header -->
+        
               <div class="panel-filters">
                 <select class="select-sm" id="filter-post">
                   <option value="">Todos os posts</option>
@@ -347,22 +347,26 @@
                   <option value="comment">Comentário</option>
                   <option value="mention">Menção</option>
                 </select>
-              </div>
+              </div><!-- /panel-filters -->
+        
               <div class="comments-list" id="comments-list">
                 <div class="loading-state" id="comments-loading">
                   <div class="spinner"></div>
                   <span>Carregando comentários…</span>
                 </div>
-              </div>
-            </div>
+              </div><!-- /comments-list -->
+        
+            </div><!-- /comments-panel -->
+        
             <div class="comment-detail" id="comment-detail">
               <div class="detail-empty" id="detail-empty">
                 <i class="fa-regular fa-comment-dots"></i>
                 <p>Selecione um comentário para ver os detalhes</p>
               </div>
               <div class="detail-content hidden" id="detail-content"></div>
-            </div>
-          </div>
+            </div><!-- /comment-detail -->
+        
+          </div><!-- /comments-layout -->
         </section>
 
         <!-- AUTOMATION -->
