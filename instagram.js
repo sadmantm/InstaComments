@@ -24,19 +24,17 @@ const SEL = {
 // ─── Launch ───────────────────────────────────────────────────────────────────
 
 async function launchBrowser(headless = true, userDataDir = USER_DATA_DIR) {
-  // Garante que o userDataDir existe (evita erro silencioso de I/O na primeira run)
   try {
     fs.mkdirSync(userDataDir, { recursive: true });
   } catch (_) {}
 
-  // Detecta locks órfãos do Chromium (PID antigo travado) e remove
-  // — causa comum de "chrome-error://chromewebdata" quando o profile está sujo
   try {
     const lockFiles = [
       path.join(userDataDir, 'SingletonLock'),
       path.join(userDataDir, 'SingletonCookie'),
       path.join(userDataDir, 'SingletonSocket'),
     ];
+
     for (const f of lockFiles) {
       if (fs.existsSync(f)) {
         try { fs.unlinkSync(f); } catch (_) {}
@@ -45,22 +43,17 @@ async function launchBrowser(headless = true, userDataDir = USER_DATA_DIR) {
   } catch (_) {}
 
   const args = [
-    // — Sandbox: obrigatório em EC2 rodando como ubuntu/root sem userns —
     '--no-sandbox',
     '--disable-setuid-sandbox',
 
-    // — Memória compartilhada: /dev/shm é só 64MB em EC2 small/medium —
     '--disable-dev-shm-usage',
 
-    // — GPU: não existe em servidor headless —
     '--disable-gpu',
-    '--use-gl=swiftshader',          // fallback de software para WebGL/canvas
+    '--use-gl=swiftshader',
     '--disable-accelerated-2d-canvas',
 
-    // — Anti-detecção mínima para Instagram —
     '--disable-blink-features=AutomationControlled',
 
-    // — Performance/estabilidade em servidor —
     '--disable-background-networking',
     '--disable-background-timer-throttling',
     '--disable-backgrounding-occluded-windows',
@@ -84,23 +77,35 @@ async function launchBrowser(headless = true, userDataDir = USER_DATA_DIR) {
     '--password-store=basic',
     '--use-mock-keychain',
 
-    // — Network/DNS confiável em EC2 —
     '--dns-prefetch-disable',
 
-    // — Janela —
     '--window-size=1280,800',
+
+    // Force browser UI and content language to English
+    '--lang=en-US,en',
+    '--accept-lang=en-US,en',
   ];
 
-  return puppeteer.launch({
-    headless: true,
+  const browser = await puppeteer.launch({
+    headless,
     userDataDir,
     args,
     defaultViewport: { width: 1280, height: 800 },
     ignoreHTTPSErrors: true,
     timeout: 60_000,
-    // dumpio: true,   // ative se precisar ver os logs do Chromium no stderr
-    protocolTimeout: 120_000,            // evita timeout em CDP em máquinas pequenas
+    protocolTimeout: 120_000,
+
+    // Force OS-level locale seen by Chromium
+    env: {
+      ...process.env,
+      LANG: 'en_US.UTF-8',
+      LANGUAGE: 'en_US:en',
+      LC_ALL: 'en_US.UTF-8',
+      LC_MESSAGES: 'en_US.UTF-8',
+    },
   });
+
+  return browser;
 }
 
 // ─── Session helpers ──────────────────────────────────────────────────────────
