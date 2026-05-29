@@ -2,6 +2,25 @@ const puppeteer = require("puppeteer");
 const path = require("path");
 const fs = require("fs");
 
+const INPUT_SELS = [
+  ".ql-editor",
+  "rich-textarea .ql-editor",
+  "[contenteditable='true']",
+  "textarea",
+];
+
+const RESPONSE_SELS = [
+  "message-content p",
+  "message-content .markdown",
+  "model-response p",
+  "model-response .markdown",
+  ".response-content p",
+  ".chat-turn-container .response-text p",
+  ".model-response-text p",
+  ".model-response-text .markdown",
+  "[data-response-index] p",
+];
+
 const SCREENSHOT_DIR = path.join(__dirname, "debug_screenshots");
 
 const RETRY_CONFIG = {
@@ -95,39 +114,105 @@ async function askGeminiOnce(prompt, { stream = false, onChunk } = {}) {
     });
 
     if (page.url().includes("accounts.google.com") || page.url().includes("signin")) {
-      await saveScreenshot(page, "login_required");
+      await saveScreenshot(page, "02_login_required");
       await browser.close();
       throw new Error(
         "Gemini exige login. Faça login manual uma vez usando headless:false e salve os cookies."
       );
     }
 
-    // Aguarda o editor ficar disponível
-    await page.waitForSelector(".ql-editor", { timeout: 30000 });
+    await page.waitForSelector(INPUT_SELS.join(", "), { timeout: 30000 });
 
-    // ── Clica fisicamente no editor para garantir foco real ──────────────────
-    const editor = await page.$(".ql-editor");
-    if (!editor) throw new Error("Editor .ql-editor não encontrado");
+    // ── Foco REAL e confiável no editor (clique do Puppeteer = isTrusted) ────
+    const editorHandle = await page.$(".ql-editor");
+    if (!editorHandle) throw new Error("Campo de input (.ql-editor) não encontrado");
+    await editorHandle.click();
+    await new Promise(r => setTimeout(r, 150));
 
-    await editor.click();
-    await new Promise(r => setTimeout(r, 300));
+    // ── Insere o texto (execCommand é rápido para prompts grandes) ───────────
+    const inserted = await page.evaluate(text => {
+      const editor =
+        document.querySelector(".ql-editor") ||
+        document.querySelector("[contenteditable='true']");
+      if (!editor) return false;
+      editor.focus();
+      const range = document.createRange();
+      const sel   = window.getSelection();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand("insertText", false, text);
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    }, prompt);
 
-    // ── Digita o prompt caractere a caractere (como um humano digitaria) ─────
-    await page.keyboard.type(prompt, { delay: 20 });
-    await new Promise(r => setTimeout(r, 300));
+    if (!inserted) throw new Error("Não foi possível inserir texto no editor");
 
-    // Confirma que o texto chegou ao DOM
-    const hasText = await page.evaluate(() => {
-      const el = document.querySelector(".ql-editor");
-      return el ? el.innerText.trim().length > 2 : false;
-    });
-    if (!hasText) throw new Error("Texto não apareceu no editor após digitação");
+    // Confirma que o texto apareceu no DOM
+    await page.waitForFunction(
+      () => {
+        const editor =
+          document.querySelector(".ql-editor") ||
+          document.querySelector("[contenteditable='true']");
+        return editor && editor.innerText.trim().length > 2;
+      },
+      { timeout: 3000 }
+    ).catch(() => { throw new Error("Campo vazio após inserção — abortando envio"); });
 
-    // ── Screenshot para debug (remova em produção) ───────────────────────────
-    await saveScreenshot(page, "before_send");
+    // ── "Toque" CONFIÁVEL: força o Quill a registrar o conteúdo no modelo ────
+    //    interno e habilitar o botão de envio. Digita um espaço e apaga.
+    await editorHandle.click();                 // garante foco antes de teclar
+    await new Promise(r => setTimeout(r, 100));
+    await page.keyboard.press("End");           // caret no fim do texto
+    await page.keyboard.type(" ");              // input confiável (isTrusted)
+    await page.keyboard.press("Backspace");     // remove o espaço (net zero)
+    await new Promise(r => setTimeout(r, 150));
 
-    // ── Pressiona Enter com o foco garantido no editor ───────────────────────
-    await editor.press("Enter");
+    // ── Envio: Enter NATIVO (trusted). O rich-textarea tem enterkeyhint=send ─
+    await page.keyboard.press("Enter");
+
+    // Detecta se o envio realmente começou: editor esvaziou OU a resposta surgiu
+    const started = await page.waitForFunction(() => {
+      const editor = document.querySelector(".ql-editor");
+      const cleared = editor && editor.innerText.trim().length === 0;
+      const responding = document.querySelector(
+        '.model-response-text, message-content, button[data-test-id="copy-button"]'
+      );
+      return Boolean(cleared || responding);
+    }, { timeout: 4000 }).then(() => true).catch(() => false);
+
+    // ── Fallback: clique REAL no botão de enviar (ElementHandle.click) ───────
+    if (!started) {
+      const sendBtn = await page.$([
+        'button[data-test-id="send-button"]',
+        'button[aria-label="Send message"]',
+        'button[aria-label="Enviar mensagem"]',
+        'button.send-button',
+        'button[mattooltip="Submit"]',
+        'button[mattooltip="Enviar"]',
+      ].join(", "));
+
+      if (sendBtn) {
+        const disabled = await sendBtn.evaluate(b => b.disabled || b.getAttribute("aria-disabled") === "true");
+        if (disabled) {
+          // último recurso: re-foca e tenta Enter de novo
+          await editorHandle.click();
+          await new Promise(r => setTimeout(r, 100));
+          await page.keyboard.press("Enter");
+          console.log("[gemini] botão desabilitado — reenvio via Enter nativo");
+        } else {
+          await sendBtn.click();
+          console.log("[gemini] envio via clique real no botão");
+        }
+      } else {
+        throw new Error("Falha ao enviar: Enter nativo não disparou e botão não encontrado");
+      }
+    } else {
+      console.log("[gemini] envio confirmado (Enter nativo)");
+    }
+
+    // Pausa para o DOM iniciar a resposta
     await new Promise(r => setTimeout(r, 500));
 
     // ── Aguarda a resposta ───────────────────────────────────────────────────
@@ -246,6 +331,7 @@ async function askGemini(prompt, options = {}) {
         throw err;
       }
       console.warn(`[gemini] tentativa ${attempt + 1} falhou: ${err.message}`);
+      await saveScreenshot(null, "retry_failed").catch(() => {});
     }
   }
 
