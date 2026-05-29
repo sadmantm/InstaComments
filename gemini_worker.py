@@ -75,7 +75,9 @@ def is_fatal(exc):
 async def try_once(prompt, proxy, psid, psidts):
     # Cada chamada cria um client com um proxy diferente -> rotação de IP real
     client = GeminiClient(psid, psidts, proxy=proxy)
-    await client.init(timeout=60, auto_close=False, auto_refresh=True)
+    # Processo é efêmero (1 spawn por chamada), então auto_refresh em background
+    # só gera re-inicializações e lentidão. Desligado de propósito.
+    await client.init(timeout=60, auto_close=False, auto_refresh=False)
     try:
         model = resolve_model()
         if model is not None:
@@ -124,7 +126,8 @@ async def main():
                 print(json.dumps({"ok": False, "error": last_err, "fatal": True}, ensure_ascii=False))
                 return
             # erro transitório (bloqueio/timeout/api) -> rotaciona pro próximo proxy
-            sys.stderr.write(f"[worker] proxy {proxy} falhou: {last_err}\n")
+            label = proxy if proxy else "SEM PROXY (conexão direta — IP do servidor)"
+            sys.stderr.write(f"[worker] {label} falhou: {last_err}\n")
             continue
 
     print(json.dumps({"ok": False, "error": last_err or "sem proxies disponíveis", "fatal": False}, ensure_ascii=False))
