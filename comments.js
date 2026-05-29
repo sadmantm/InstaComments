@@ -206,50 +206,25 @@ async function scrapeVisibleComments(page) {
   await expandTruncatedComments(page);
 
   const results = await page.evaluate(() => {
-    // ---------- helpers ----------
+    // ---------- helpers (iguais ao original) ----------
     function fakeId(username, postShortcode, text) {
-      // Normaliza o texto para reduzir variações entre scrapes
       const normalized = text.trim().toLowerCase().replace(/\s+/g, ' ');
       const raw  = `${username}::${postShortcode}::${normalized}`;
-      const hash = raw
-        .split('')
-        .reduce((a, c) => (Math.imul(31, a) + c.charCodeAt(0)) | 0, 0);
+      const hash = raw.split('').reduce((a, c) => (Math.imul(31, a) + c.charCodeAt(0)) | 0, 0);
       return 'fake_' + Math.abs(hash).toString(36);
     }
 
-    /**
-     * Mapeia textos de data em PT/EN para um ISO aproximado.
-     * O Instagram exibe coisas como:
-     *   "May 15", "15 de mai.", "2h", "3 d", "1 sem.", "1w", "yesterday", "ontem"
-     * Não temos o ano nem hora exatos, então retornamos:
-     *   { raw: 'May 15', iso: '2026-05-15' } quando der pra inferir uma data,
-     *   { raw: '2h', iso: null }            quando for relativo curto (deixamos pro caller resolver com seenAt).
-     */
     function parseTimeLabel(raw) {
       if (!raw) return { raw: '', iso: null };
       const txt = raw.trim();
-
-      // Relativo curto: 2h, 3d, 1w, 5m, 1s (segundos), 1 sem., 2 sem
       const relMatch = txt.match(/^(\d+)\s*(s|m|h|d|w|sem\.?)$/i);
       if (relMatch) return { raw: txt, iso: null };
-
-      // "yesterday" / "ontem"
       if (/^(yesterday|ontem)$/i.test(txt)) {
-        const d = new Date();
-        d.setDate(d.getDate() - 1);
+        const d = new Date(); d.setDate(d.getDate() - 1);
         return { raw: txt, iso: d.toISOString().slice(0, 10) };
       }
-
-      // "May 15", "Jan 3", etc.
-      const monthsEN = {
-        jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-        jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-      };
-      const monthsPT = {
-        jan: 0, fev: 1, mar: 2, abr: 3, mai: 4, jun: 5,
-        jul: 6, ago: 7, set: 8, out: 9, nov: 10, dez: 11,
-      };
-
+      const monthsEN = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
+      const monthsPT = { jan:0,fev:1,mar:2,abr:3,mai:4,jun:5,jul:6,ago:7,set:8,out:9,nov:10,dez:11 };
       const enMatch = txt.match(/^([A-Za-z]{3,})\s+(\d{1,2})$/);
       if (enMatch) {
         const key = enMatch[1].slice(0, 3).toLowerCase();
@@ -258,13 +233,10 @@ async function scrapeVisibleComments(page) {
         if (m != null) {
           const year = new Date().getFullYear();
           const d = new Date(Date.UTC(year, m, day));
-          // se a data caiu no futuro, assume ano anterior
           if (d > new Date()) d.setUTCFullYear(year - 1);
           return { raw: txt, iso: d.toISOString().slice(0, 10) };
         }
       }
-
-      // "15 de mai." / "15 de mai"
       const ptMatch = txt.match(/^(\d{1,2})\s*de\s*([a-zç]{3,})\.?$/i);
       if (ptMatch) {
         const day = parseInt(ptMatch[1], 10);
@@ -277,59 +249,67 @@ async function scrapeVisibleComments(page) {
           return { raw: txt, iso: d.toISOString().slice(0, 10) };
         }
       }
-
       return { raw: txt, iso: null };
     }
 
-    /**
-     * Extrai o texto do comentário e a data a partir do span principal.
-     * Estrutura observada:
-     *   <span dir="auto">
-     *     <a href="/user/"><div>...<span class="_ap3a">user</span>...</div></a>
-     *     " commented: TEXTO DO COMENTÁRIO "
-     *     <div role="button">more</div>   (opcional)
-     *     <span>May 15</span>             (data, sempre o último span direto)
-     *   </span>
-     */
     function extractTextAndDate(container) {
       const mainSpan = container.querySelector('div.x1iyjqo2 > span[dir="auto"]');
       if (!mainSpan) return { text: '', dateLabel: '' };
-
-      // 1) Data: último <span> filho DIRETO do mainSpan (não dentro do <a>)
       let dateLabel = '';
-      const directSpans = Array.from(mainSpan.children).filter(
-        (el) => el.tagName === 'SPAN'
-      );
-      if (directSpans.length > 0) {
+      const directSpans = Array.from(mainSpan.children).filter(el => el.tagName === 'SPAN');
+      if (directSpans.length > 0)
         dateLabel = (directSpans[directSpans.length - 1].innerText || '').trim();
-      }
-
-      // 2) Texto: clona o span e remove o que não é o conteúdo
       const clone = mainSpan.cloneNode(true);
-
-      // remove o link do username (e tudo dentro)
-      clone.querySelectorAll('a').forEach((a) => {
-        // só remove se for o link de perfil (não tem aria-label de mídia)
-        if (!a.getAttribute('aria-label')) a.remove();
-      });
-      // remove botão "more"
-      clone.querySelectorAll('div[role="button"]').forEach((el) => el.remove());
-      // remove o último span (que é a data)
-      const cloneSpans = Array.from(clone.children).filter(
-        (el) => el.tagName === 'SPAN'
-      );
+      clone.querySelectorAll('a').forEach(a => { if (!a.getAttribute('aria-label')) a.remove(); });
+      clone.querySelectorAll('div[role="button"]').forEach(el => el.remove());
+      const cloneSpans = Array.from(clone.children).filter(el => el.tagName === 'SPAN');
       if (cloneSpans.length > 0) cloneSpans[cloneSpans.length - 1].remove();
-
       let text = clone.innerText || clone.textContent || '';
-
-      // remove "commented:" / "comentou:" no início
       text = text.replace(/^\s*(?:commented|comentou)\s*:\s*/i, '');
-      // remove menção @username inicial, se houver
       text = text.replace(/^@\S+\s*/, '');
-      // colapsa espaços/quebras
       text = text.replace(/\s+/g, ' ').trim();
-
       return { text, dateLabel };
+    }
+
+    // ---------- helpers de classificação ----------
+
+    /**
+     * Retorna true se o container é uma notificação de like/follow/mention
+     * e NÃO um comentário.
+     *
+     * Heurísticas:
+     *  1. O span principal NÃO contém "commented:" / "comentou:"
+     *  2. O texto contém padrões típicos de like/follow ("liked your", "started following",
+     *     "curtiu", "começou a seguir", "and X others", "e mais X")
+     */
+    function isLikeOrFollowNotification(container) {
+      const mainSpan = container.querySelector('div.x1iyjqo2 > span[dir="auto"]');
+      if (!mainSpan) return true; // sem span principal → desconhecido, descartar
+
+      const raw = (mainSpan.innerText || mainSpan.textContent || '').toLowerCase();
+
+      // DEVE conter "commented" / "comentou" para ser comentário
+      const isComment = /commented\s*:|comentou\s*:/.test(raw);
+      if (isComment) return false;
+
+      // Padrões de notificação de like/follow/mention para confirmar descarte
+      const nonCommentPatterns = [
+        /liked your/,
+        /curtiu (sua|o seu|a sua)/,
+        /started following/,
+        /começou a seguir/,
+        /mentioned you/,
+        /mencionou/,
+        /and \d+ others/,
+        /e mais \d+/,
+        /also liked/,
+        /também curtiu/,
+      ];
+      // se bater qualquer padrão de não-comentário, descarta
+      if (nonCommentPatterns.some(p => p.test(raw))) return true;
+
+      // Se não tem "commented" E não bate nenhum padrão conhecido → descarta por segurança
+      return true;
     }
 
     // ---------- main loop ----------
@@ -338,13 +318,14 @@ async function scrapeVisibleComments(page) {
 
     for (const container of containers) {
       try {
-        // Username via span dedicado
+        // ── FILTRO PRINCIPAL: ignora likes, follows, etc. ──────────────────
+        if (isLikeOrFollowNotification(container)) continue;
+
         const usernameEl = container.querySelector('span._ap3a._aaco._aacw._aacx._aad7._aade');
         if (!usernameEl) continue;
         const username = (usernameEl.innerText || '').trim();
         if (!username) continue;
 
-        // Link da mídia (post)
         const mediaLink =
           container.querySelector('a[aria-label="Media thumbnail"]') ||
           container.querySelector('a[aria-label="Miniatura de mídia"]');
@@ -358,7 +339,6 @@ async function scrapeVisibleComments(page) {
         const postUrl = `https://www.instagram.com${postHref}`;
         const thumbnailUrl = mediaLink.querySelector('img')?.src || '';
 
-        // Comment ID (link /c/) — quando o IG renderiza
         let commentId = '';
         let commentDatetime = '';
         const commentLink = container.querySelector('a[href*="/c/"]');
@@ -370,19 +350,20 @@ async function scrapeVisibleComments(page) {
           if (timeEl) commentDatetime = timeEl.getAttribute('datetime') || '';
         }
 
-        // Texto + data exibida ao lado
         const { text, dateLabel } = extractTextAndDate(container);
-        const parsed = parseTimeLabel(dateLabel);
 
+        // Segurança extra: se o texto extraído ainda parecer notificação, pula
+        if (/liked your|curtiu|started following|começou a seguir/i.test(text)) continue;
+
+        const parsed = parseTimeLabel(dateLabel);
         if (!commentId) commentId = fakeId(username, postShortcode, text);
 
-        // Foto de perfil: pega via alt estável ("X's profile picture" / "Foto do perfil de X")
         let profilePic = '';
         const avatarLink = container.querySelector(`a[href="/${username}/"] img`);
         if (avatarLink) {
           profilePic = avatarLink.getAttribute('src') || '';
         } else {
-          const profileImg = Array.from(container.querySelectorAll('img')).find((img) => {
+          const profileImg = Array.from(container.querySelectorAll('img')).find(img => {
             const alt = (img.getAttribute('alt') || '').toLowerCase();
             return (
               alt.includes(`${username.toLowerCase()}'s profile picture`) ||
@@ -393,18 +374,10 @@ async function scrapeVisibleComments(page) {
         }
 
         out.push({
-          username,
-          text,
-          postShortcode,
-          postUrl,
-          thumbnailUrl,
-          postTitle: '',
+          username, text, postShortcode, postUrl, thumbnailUrl, postTitle: '',
           commentId,
-          // datetime preciso (quando o IG fornece via <time>) ou ISO parseado do label
           datetime: commentDatetime || parsed.iso || '',
-          // como veio na tela: "May 15", "2h", "1 sem.", etc.
           timeLabel: parsed.raw,
-          // flag: true se for relativo ("2h") e não conseguimos virar data absoluta
           timeIsRelative: !commentDatetime && !parsed.iso && !!parsed.raw,
           profilePic,
         });
@@ -420,7 +393,7 @@ async function scrapeVisibleComments(page) {
   return results;
 }
 
-// ─── Helper JS injetado na página do post ────────────────────────────────────
+// Helper JS injetado na página do post
 const helperSrc = `
   function normText(v) { return (v||'').replace(/\\s+/g,' ').trim().toLowerCase(); }
 
