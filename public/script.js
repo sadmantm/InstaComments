@@ -627,6 +627,31 @@ async function markAsRepliedApi(commentId) {
   }
 }
 
+async function markAsPendingApi(commentId) {
+  const comment = state.comments.find(c => String(c.id) === String(commentId));
+  if (!comment) return;
+
+  try {
+    await apiFetch(`/api/comments/${commentId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ replied: false }),
+    });
+
+    comment.replied   = false;
+    comment.repliedAt = null;
+
+    renderComments();
+    if (String(state.selectedComment) === String(commentId)) {
+      renderDetail(comment);
+    }
+    showToast('success', 'Comentário marcado como pendente.');
+    syncStats();
+  } catch (e) {
+    showToast('error', 'Erro ao marcar como pendente: ' + e.message);
+  }
+}
+
+
 function initBulkActions() {
   const btn  = document.getElementById('bulk-btn');
   const menu = document.getElementById('bulk-menu');
@@ -809,9 +834,9 @@ document.addEventListener('click', e => {
       showToast('success', 'Usuário copiado.');
       break;
 
-    case 'pending':
-      showToast('info', 'Função de status disponível via bot.');
-      break;
+      case 'pending':
+        markAsPendingApi(_commentId);
+        break;
 
       case 'replied':
         markAsRepliedApi(_commentId);
@@ -911,7 +936,7 @@ function renderDetail(c) {
   });
 
   content.querySelector('[data-action="pending"]')?.addEventListener('click', () =>
-    showToast('info', 'Função de status disponível via bot.'));
+    markAsPendingApi(c.id));
   content.querySelector('#btn-send-reply').addEventListener('click', () => sendReply(c.id, false));
   content.querySelector('#btn-ai-reply').addEventListener('click', () => generateAiReply(c));
 }
