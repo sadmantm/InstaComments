@@ -3,7 +3,9 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // ── Configuração ─────────────────────────────────────────────────────────────
 // Modelo: gemini-2.0-flash — rápido, barato e capaz o suficiente para a maioria
 // dos casos. Alternativa ainda mais econômica: "gemini-2.0-flash-lite"
-const MODEL_NAME = "gemini-2.0-flash";
+// gemini-2.0-flash-lite: cota gratuita própria, mais econômico
+// gemini-2.0-flash: mais capaz, cota separada
+const MODEL_NAME = "gemini-2.0-flash-lite";
 
 const RETRY_CONFIG = {
   maxAttempts: 5,
@@ -19,12 +21,16 @@ function calcDelay(attempt) {
 }
 
 function isFatalError(err) {
-  // Erros de autenticação ou cota não devem ser re-tentados
   return (
     err.message?.includes("API_KEY_INVALID") ||
-    err.message?.includes("PERMISSION_DENIED") ||
-    err.message?.includes("RESOURCE_EXHAUSTED")
+    err.message?.includes("PERMISSION_DENIED")
   );
+}
+
+// Extrai o retryDelay sugerido pelo servidor (ex: "50s" → 50000ms)
+function parseRetryDelay(err) {
+  const match = err.message?.match(/"retryDelay"\s*:\s*"(\d+)s"/);
+  return match ? parseInt(match[1], 10) * 1000 : null;
 }
 
 function getClient() {
@@ -68,8 +74,9 @@ async function askGemini(prompt, options = {}) {
 
   for (let attempt = 0; attempt < RETRY_CONFIG.maxAttempts; attempt++) {
     if (attempt > 0) {
-      const delay = calcDelay(attempt);
-      console.log(`[gemini] tentativa ${attempt + 1}/${RETRY_CONFIG.maxAttempts} em ${delay}ms...`);
+      const retryAfter = parseRetryDelay(lastError);
+      const delay = retryAfter ?? calcDelay(attempt);
+      console.log(`[gemini] tentativa ${attempt + 1}/${RETRY_CONFIG.maxAttempts} em ${delay}ms${retryAfter ? " (sugerido pelo servidor)" : ""}...`);
       await new Promise(r => setTimeout(r, delay));
     }
 
