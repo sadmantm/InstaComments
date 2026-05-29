@@ -220,7 +220,7 @@ async function askGeminiOnce(prompt, { stream = false, onChunk } = {}) {
 
     let lastText = "";
 
-    await saveScreenshot(null, "Gerando").catch(() => {});
+    await saveScreenshot(page, "Gerando");
 
     if (stream && typeof onChunk === "function") {
       await page.exposeFunction("__geminiChunk__", onChunk);
