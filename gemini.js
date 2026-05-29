@@ -290,6 +290,7 @@ async function askGemini(prompt, options = {}) {
       console.log(
         `[gemini] tentativa ${attempt + 1}/${RETRY_CONFIG.maxAttempts} em ${delay}ms...`
       );
+
       await new Promise((r) => setTimeout(r, delay));
     }
 
@@ -308,6 +309,7 @@ async function askGemini(prompt, options = {}) {
       }
 
       console.warn(`[gemini] tentativa ${attempt + 1} falhou: ${err.message}`);
+      await saveScreenshot(page, "02_login_required");
     }
   }
 
