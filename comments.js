@@ -528,6 +528,11 @@ async function replyToComment(
 
   if (!session) throw new Error('Sem sessão reply. Conecte o Instagram novamente.');
 
+  const cleanReply = sanitizeReply(replyText);
+if (!cleanReply) {
+  throw new Error('Resposta rejeitada pelo sanitizador (provável vazamento de raciocínio do LLM).');
+}
+
   const { browser, page } = session;
   let lastError;
 
@@ -546,6 +551,10 @@ async function replyToComment(
         await sleep(2000);
 
         const currentUrl = page.url();
+
+        if (!currentUrl.includes(`/${postShortcode}`) && !currentUrl.includes(postShortcode)) {
+          throw new Error(`Navegação foi para URL errada: esperado ${postShortcode}, obtido ${currentUrl}`);
+        }
 
         if (currentUrl.includes('accounts.google.com') || currentUrl.includes('/accounts/login')) {
           throw new Error('Redirecionado para login — sessão reply expirada.');
@@ -599,7 +608,7 @@ async function replyToComment(
         });
         
         const prefix = existingText.endsWith(' ') ? '' : ' ';
-        await textarea.type(prefix + replyText, { delay: 40 });
+        await textarea.type(prefix + cleanReply, { delay: 40 });
         await sleep(500);
         
         const posted = await page.evaluate(() => {
@@ -615,7 +624,7 @@ async function replyToComment(
 
         await sleep(2000);
 
-        markAsReplied(db, commentKey, replyText, commentsPath);
+        markAsReplied(db, commentKey, cleanReply, commentsPath);
 
         console.log(`[reply] ✅ Resposta postada com sucesso para @${username}!`);
         return;
@@ -628,10 +637,45 @@ async function replyToComment(
     }
   } finally {
     console.log('[reply] Fechando sessão dedicada [reply].');
+    const proc = browser.process();
     await browser.close();
+    // Espera o processo do Chromium realmente terminar antes de liberar o profile
+    if (proc) {
+      await new Promise((resolve) => {
+        if (proc.exitCode !== null) return resolve();
+        proc.once('exit', resolve);
+        setTimeout(resolve, 5000); // fallback
+      });
+    }
   }
 
   throw new Error(`Falha após ${maxRetries} tentativas. Último erro: ${lastError?.message}`);
+}
+
+// Rede de segurança: nunca postar JSON cru ou vazamento de estrutura
+function sanitizeReply(raw) {
+  if (!raw) return null;
+  let t = String(raw).trim();
+
+  // Se veio JSON cru (truncado ou não), tenta extrair "resposta"
+  if (t.startsWith('{') || t.includes('"resposta"')) {
+    const m = t.match(/"resposta"\s*:\s*"((?:[^"\\]|\\.)*)/);
+    if (m && m[1]) {
+      t = m[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\').trim();
+    } else {
+      return null; // não recuperável → não posta
+    }
+  }
+
+  // Marcadores que nunca devem ir pro Instagram
+  if (/(INTENCAO_|VIDEO_|TIPO_DO_VIDEO|Rascunhos?:|"resposta"\s*:)/i.test(t)) {
+    return null;
+  }
+
+  t = t.replace(/^["'*\s]+|["'*\s]+$/g, '').trim();
+  if (!t || t.length > 300) return null;
+
+  return t;
 }
 
 async function fetchComments({

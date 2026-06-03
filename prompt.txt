@@ -201,21 +201,12 @@
   },
 
   "output_format": {
-    "format_type": "plain_text",
+    "format_type": "json",
     "required_elements": [
-      "APENAS o texto da resposta final, pronto pra postar.",
-      "Sem prefácios, sem aspas, sem tags, sem rótulo de categoria.",
-      "Se for resposta só de emojis, retorne só emojis.",
-      "NUNCA exponha o raciocínio interno (qual intenção, qual tom)."
-    ],
-    "internal_reasoning_steps": [
-      "1. Leia o comentário e o tipo do vídeo.",
-      "2. Classifique a INTENÇÃO (comercial / suporte / engajamento / ambígua / outra).",
-      "3. Se for comercial ou suporte → resposta DEVE incluir o WhatsApp 99 9205-1850.",
-      "4. Identifique o TOM DO VÍDEO (entretenimento / sério / desconhecido) e ajuste o estilo.",
-      "5. Gere 2 rascunhos diferentes.",
-      "6. Escolha o mais humano, mais curto, e que melhor combina intenção + tom.",
-      "7. Retorne APENAS o texto final."
+      "Retorne um objeto JSON com um único campo: resposta.",
+      "O valor de resposta é APENAS o texto final pronto pra postar.",
+      "Sem prefácios, sem rótulo de categoria, sem raciocínio.",
+      "Se for resposta só de emojis, o campo resposta contém só emojis."
     ]
   },
 

@@ -1,16 +1,11 @@
-// gemini.js — cliente Node.js para a API oficial do Google Gemini
-//
-// Modelo padrão : gemini-2.5-flash-lite-preview-06-17
-// Documentação  : https://ai.google.dev/api/generate-content
-//
 // Interface mantida: askGemini(prompt, opts) e askGeminiOnce(prompt, opts)
 
 const https = require("https");
 
 // ── Configurações ────────────────────────────────────────────────────────────
 
-const API_KEY    = process.env.GEMINI_API_KEY;
-const DEFAULT_MODEL = "gemini-2.5-flash-lite";
+const API_KEY    = "";
+const DEFAULT_MODEL = "gemini-2.5-flash";
 const BASE_URL   = "generativelanguage.googleapis.com";
 
 const RETRY_CONFIG = {
@@ -32,6 +27,38 @@ function isFatalStatus(status) {
   return status >= 400 && status < 500 && status !== 429;
 }
 
+/**
+ * Extrai o campo `resposta` de um texto que deveria ser JSON.
+ * Tenta parse direto; se falhar (JSON truncado), tenta recuperar a string
+ * do campo resposta via regex. Retorna null se não conseguir nada utilizável.
+ */
+function extractResposta(text) {
+  if (!text) return null;
+
+  // 1. Parse limpo
+  try {
+    const obj = JSON.parse(text);
+    if (obj && typeof obj.resposta === "string" && obj.resposta.trim()) {
+      return obj.resposta.trim();
+    }
+  } catch (_) { /* segue pro fallback */ }
+
+  // 2. JSON truncado: tenta extrair o valor de "resposta" mesmo sem fechar
+  //    Captura tudo entre "resposta":" e a próxima aspa não-escapada OU o fim.
+  const m = text.match(/"resposta"\s*:\s*"((?:[^"\\]|\\.)*)/);
+  if (m && m[1]) {
+    // Desescapa sequências básicas (\" \\ \n)
+    const recovered = m[1]
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, "\n")
+      .replace(/\\\\/g, "\\")
+      .trim();
+    if (recovered) return recovered;
+  }
+
+  return null;
+}
+
 // ── Chamada HTTP à API do Gemini ─────────────────────────────────────────────
 
 function callGeminiAPI(prompt, model) {
@@ -44,9 +71,17 @@ function callGeminiAPI(prompt, model) {
         { role: "user", parts: [{ text: prompt }] }
       ],
       generationConfig: {
-        temperature    : 1,
-        topP           : 0.95,
-        maxOutputTokens: 8192,
+        temperature     : 0.9,
+        topP            : 0.95,
+        maxOutputTokens : 2048,        // folga p/ não truncar o JSON (estrutura + emojis)
+        responseMimeType: "application/json",
+        responseSchema  : {
+          type: "object",
+          properties: {
+            resposta: { type: "string" }
+          },
+          required: ["resposta"]
+        }
       },
     });
 
@@ -84,18 +119,31 @@ function callGeminiAPI(prompt, model) {
           return reject(new Error(`Resposta JSON inválida: ${data.slice(0, 300)}`));
         }
 
-        // Extrai o texto gerado
-        const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+        const candidate    = json?.candidates?.[0];
+        const finishReason  = candidate?.finishReason || "desconhecido";
+        const text          = candidate?.content?.parts?.[0]?.text;
+
         if (!text) {
-          // Possível bloqueio de safety ou resposta vazia
-          const reason = json?.candidates?.[0]?.finishReason || "desconhecido";
-          const err    = new Error(`Resposta vazia ou bloqueada (finishReason: ${reason})`);
-          // SAFETY / RECITATION são fatais; tentar novamente não vai mudar nada
-          err.fatal = ["SAFETY", "RECITATION"].includes(reason);
+          const err = new Error(`Resposta vazia ou bloqueada (finishReason: ${finishReason})`);
+          err.fatal = ["SAFETY", "RECITATION"].includes(finishReason);
           return reject(err);
         }
 
-        resolve(text);
+        // Se foi truncado por limite de tokens, NÃO é fatal — retry pode resolver
+        if (finishReason === "MAX_TOKENS") {
+          // Ainda assim, tenta recuperar o que veio; se recuperar algo válido, usa.
+          const partial = extractResposta(text);
+          if (partial) return resolve(partial);
+          return reject(new Error(`Geração truncada (MAX_TOKENS) sem resposta recuperável.`));
+        }
+
+        const finalReply = extractResposta(text);
+        if (!finalReply) {
+          // NUNCA resolve com JSON cru. Rejeita pra disparar retry.
+          return reject(new Error(`Não foi possível extrair "resposta" do JSON: ${text.slice(0, 200)}`));
+        }
+
+        resolve(finalReply);
       });
     });
 
@@ -107,14 +155,6 @@ function callGeminiAPI(prompt, model) {
 
 // ── API pública ───────────────────────────────────────────────────────────────
 
-/**
- * Uma única chamada sem retry.
- * Opções: { stream, onChunk, model }
- *
- * `stream` e `onChunk` são mantidos por compatibilidade com o código existente.
- * A API REST não entrega streaming real; o texto é reemitido em chunks após
- * a resposta completa chegar.
- */
 async function askGeminiOnce(prompt, { stream = false, onChunk, model } = {}) {
   const text = await callGeminiAPI(prompt, model);
 
@@ -128,10 +168,6 @@ async function askGeminiOnce(prompt, { stream = false, onChunk, model } = {}) {
   return text;
 }
 
-/**
- * Chamada com retry automático (backoff exponencial + jitter).
- * Aborta imediatamente em erros fatais (4xx, safety block, etc.).
- */
 async function askGemini(prompt, options = {}) {
   let lastError;
 
@@ -163,7 +199,6 @@ async function askGemini(prompt, options = {}) {
 
 module.exports = { askGemini, askGeminiOnce };
 
-// ── Uso direto pela linha de comando: node gemini.js "seu prompt" ─────────────
 if (require.main === module) {
   const prompt = process.argv.slice(2).join(" ") || "qual a capital do Brasil?";
 
@@ -171,9 +206,3 @@ if (require.main === module) {
     .then(r  => console.log("\n===== RESPOSTA =====\n" + r))
     .catch(e => { console.error("\n[gemini] erro final:", e.message); process.exit(1); });
 }
-
-// ── Exemplo de uso com streaming simulado ─────────────────────────────────────
-// askGemini(prompt, {
-//   stream : true,
-//   onChunk: delta => process.stdout.write(delta),
-// }).then(full => console.log("\n\ntotal:", full.length, "chars")).catch(console.error);
